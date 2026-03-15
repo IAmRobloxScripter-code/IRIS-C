@@ -1,8 +1,9 @@
-# URCL_TYPES = {
+# types = {
 #     "IntType": def(bits: int):
 #         pass
 # }
 from typing import Union
+from .urcl_ir_compiler import __COMPILER__
 
 MAX_BITS = 16
 REPR_MODULE_INDENTATION = 2
@@ -84,6 +85,7 @@ class __DOUBLE_TYPE__:
     def as_string(self):
         return "double"
 
+
 class __ARRAY_TYPE__:
     def __init__(self, of, size: int):
         self.kind = "ArrayType"
@@ -100,11 +102,12 @@ class __ARRAY_TYPE__:
     def as_string(self):
         return f"[{self.size} x {self.of.as_string()}]"
 
+
 class __STRING_TYPE__:
     def __init__(self, size: int = 0):
         self.kind = "StringType"
         self.size_in_bits = MAX_BITS
-        self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size);
+        self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size)
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -114,6 +117,7 @@ class __STRING_TYPE__:
 
     def as_string(self):
         return self.representation.as_string()
+
 
 class __FUNCTION_TYPE__:
     def __init__(self, return_type: object, args: list[object]):
@@ -136,7 +140,7 @@ class __FUNCTION_TYPE__:
         return representation
 
 
-class __URCL_TYPES_CLASS__:
+class __types_CLASS__:
     def IntType(self, size: int):
         return __INT_TYPE__(size)
 
@@ -196,10 +200,39 @@ class __CONSTANT__:
         representation += "]"
         return representation
 
-    def as_string_str(self):
-        return rf'c"{self.value}\00"'
+    def as_string_str(self, display_string_as_array):
+        if not display_string_as_array:
+            representation = "\""
+            for char in self.value:
+                if char in ("\n", "\t", "\"", "\r", "\0", "\\", "\'", "\b", "\f", "\v", "\a", "\00", "\000"):
+                    representation += f"\\{str(ord(char))}"
+                else:
+                    representation += char
+            representation += "\\0\""
+            return representation
 
-    def as_string(self):
+        representation = "["
+        inquotes = False
+        for char in self.value:
+            if char in ("\n", "\t", "\"", "\r", "\0", "\\", "\'", "\b", "\f", "\v", "\a", "\00", "\000"):
+                if inquotes == True:
+                    inquotes = False
+                    representation += "\""
+                representation += ", "
+                representation += str(ord(char))
+            else:
+                if inquotes == False:
+                    inquotes = True
+                    representation += f"{", " if representation != "[" else ""}\""
+                representation += char
+        if inquotes == True:
+            inquotes = False
+            representation += "\""
+        representation += ", 0]"
+        return representation
+
+
+    def as_string(self, display_string_as_array = False):
         if self.type["kind"] == "IntType":
             return self.as_int_str()
         elif self.type["kind"] in ("HalfType", "FloatType", "DoubleType"):
@@ -207,12 +240,12 @@ class __CONSTANT__:
         elif self.type["kind"] == "ArrayType":
             return self.as_array_str()
         elif self.type["kind"] == "StringType":
-            return self.as_string_str()
+            return self.as_string_str(display_string_as_array)
 
 
 class __IR_CLASS__:
     def __init__(self):
-        self.urcl_types = __URCL_TYPES_CLASS__()
+        self.types = __types_CLASS__()
 
     def create_module(self) -> "__MODULE_CLASS__": ...
 
@@ -270,14 +303,26 @@ class __BLOCK_CLASS__:
 
         return block
 
+    def get_element_pointer(
+        self, pointer, element_type, index: __CONSTANT__, name=None
+    ):
+        return {
+            "kind": "GetElementPointerBlock",
+            "element_type": element_type,
+            "pointer": pointer,
+            "index": index,
+            "name": name or self.temporary(),
+        }
+
 
 class __MODULE_IR__:
     def __init__(self, blocks: list, data: dict):
         self.module = ""
-        self.blocks = (blocks,)
+        self.blocks = blocks
         self.data = data
         self.indentation = 0
         self.stack_frame = []
+        self.globals = []
 
         for block in blocks:
             self.ir(block)
@@ -314,6 +359,8 @@ class __MODULE_IR__:
                 return self.value_ir(block)
             case "AddBlock" | "SubBlock":
                 return self.operator_ir(block)
+            case "GetElementPointerBlock":
+                return self.gep_ir(block)
 
     def write(self, text: str):
         self.module += f"{" "*(self.indentation * REPR_MODULE_INDENTATION)}{text}"
@@ -336,25 +383,35 @@ class __MODULE_IR__:
             self.writeln(f"#{block["header_kind"]} == {block["value"]}")
 
     def global_memory_block(self, block):
+        if len(self.stack_frame) != 0:
+            return f"@{block["name"]}", block["type"]
+        if block["name"] in self.globals:
+            return f"@{block["name"]}", block["type"]
         self.writeln(
             f"global {block["name"]} = {block["type"].as_string()}, {block["initializer"].as_string()}"
         )
-        return f"@{block["name"]}"
+        self.globals.append(block["name"])
+        return f"@{block["name"]}", block["type"]
 
     def alloc_ir(self, block):
         frame = self.get_stack_frame()
+        if block["result"].name in frame["data"]:
+            return "%" + block["result"].name, block["result"].type
         frame["data"][block["result"].name] = {
             "kind": "LocalVariable",
             "type": block["result"].type,
             "initialized": False,
         }
-        return block["result"].name
+        return "%" + block["result"].name, block["result"].type
 
     def constant_ir(self, block):
-        return block.as_string(), block.type.as_string()
+        return block.as_string(), block.type
 
     def value_ir(self, block):
-        return f"%{block.name}", block.type.as_string()
+        return f"%{block.name}", block.type
+
+    def get_symbol_from_name(self, name: str):
+        return "%" if name not in self.globals else "@"
 
     def store_ir(self, block):
         frame = self.get_stack_frame()
@@ -365,9 +422,9 @@ class __MODULE_IR__:
                 )
             frame["data"][block["memory"].name]["initialized"] = True
             value, type = self.ir(block["value"])  # type: ignore
-
+            name, alloc_type = self.ir(block["memory"]) # type: ignore
             self.writeln(
-                f"store {type} {value}, {block["memory"].type.as_pointer().as_string()} %{block["memory"].name}"
+                f"store {type.as_string()} {value}, {alloc_type.as_pointer().as_string()} {name}"  # type: ignore
             )
 
     def function_ir(self, block):
@@ -385,22 +442,33 @@ class __MODULE_IR__:
 
     def ret_ir(self, block):
         value, type = self.ir(block["value"])  # type: ignore
-        self.writeln(f"ret {type} {value}")
+        self.writeln(f"ret {type.as_string()} {value}")  # type: ignore
+
+    def get_symbol(self):
+        return "@" if len(self.stack_frame) == 0 else "%"
 
     def operator_ir(self, block):
         left_value, left_type = self.ir(block["left"])  # type: ignore
         right_value, right_type = self.ir(block["right"])  # type: ignore
-
+        symbol = self.get_symbol()
         match block["kind"]:
             case "AddBlock":
                 self.writeln(
-                    f"%{block["result"]} = add {left_type} {left_value}, {right_value}"
+                    f"{symbol}{block["result"]} = add {left_type.as_string()} {left_value}, {right_value}"
                 )
             case "SubBlock":
                 self.writeln(
-                    f"%{block["result"]} = sub {left_type} {left_value}, {right_value}"
+                    f"{symbol}{block["result"]} = sub {left_type.as_string()} {left_value}, {right_value}"
                 )
         return block["result"], left_type
+
+    def gep_ir(self, block):
+        pointer, pointer_type = self.ir(block["pointer"])
+        index, index_type = self.ir(block["index"])
+        self.writeln(
+            f"{self.get_symbol()}{block["name"]} = getelementptr {pointer_type.as_string()} {pointer}, {index_type.as_string()} {index}"
+        )
+        return self.get_symbol_from_name(block["name"]) + block["name"], block["element_type"]
 
 
 class __MODULE_CLASS__:
@@ -411,6 +479,9 @@ class __MODULE_CLASS__:
 
     def __getitem__(self, key):
         return getattr(self, key)
+    
+    def compile(self):
+        return __COMPILER__(self.blocks).urcl
 
     @property
     def module(self):
@@ -448,9 +519,17 @@ class __MODULE_CLASS__:
         block = {"kind": "SubBlock", "left": left, "right": right, "result": identifier}
 
         return block
-    
-    def get_element_pointer(self, ):
-        
+
+    def get_element_pointer(
+        self, pointer, element_type, index: __CONSTANT__, name=None
+    ):
+        return {
+            "kind": "GetElementPointerBlock",
+            "element_type": element_type,
+            "pointer": pointer,
+            "index": index,
+            "name": name or self.temporary(),
+        }
 
     def global_variable(self, name, type: object, initializer: __CONSTANT__):
         identifier = name or self.temporary()
@@ -463,12 +542,12 @@ class __MODULE_CLASS__:
         self.blocks.append(block)
         self.data[identifier] = block
         return block
-    
-    def create_global_string(self, value, name = None):
+
+    def create_global_string(self, value, name=None):
         return self.global_variable(
             name,
-            ir.urcl_types.StringType(len(value) + 1),
-            ir.constant(ir.urcl_types.StringType(len(value) + 1), value),
+            ir.types.StringType(len(value) + 1).as_pointer(),
+            ir.constant(ir.types.StringType(len(value) + 1), value),
         )
 
     def create_block(self):

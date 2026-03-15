@@ -1,0 +1,8 @@
+RUN ROM
+BITS == 16
+MINHEAP 64
+MINREG 16
+MINSTACK 16
+
+.1
+    DW ["Hello World!", 0]
