@@ -8,12 +8,12 @@ from .urcl_ir_compiler import __COMPILER__
 MAX_BITS = 16
 REPR_MODULE_INDENTATION = 2
 
-
 class __POINTER_TYPE__:
     def __init__(self, type: object):
         self.kind = "PointerType"
         self.to = type
         self.size_in_bits = MAX_BITS
+        self.offset = MAX_BITS // 8
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -30,6 +30,7 @@ class __INT_TYPE__:
         self.kind = "IntType"
         self.size = size
         self.size_in_bits = size
+        self.offset = size // 8
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -45,6 +46,7 @@ class __HALF_TYPE__:
     def __init__(self):
         self.kind = "HalfType"
         self.size_in_bits = 16
+        self.offset = 2
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -60,6 +62,7 @@ class __FLOAT_TYPE__:
     def __init__(self):
         self.kind = "FloatType"
         self.size_in_bits = 32
+        self.offset = 4
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -75,6 +78,7 @@ class __DOUBLE_TYPE__:
     def __init__(self):
         self.kind = "DoubleType"
         self.size_in_bits = 64
+        self.offset = 8
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -92,6 +96,7 @@ class __ARRAY_TYPE__:
         self.of = of
         self.size = size
         self.size_in_bits = of.size_in_bits * size
+        self.offset = (of.size_in_bits * size) // 8
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -108,6 +113,7 @@ class __STRING_TYPE__:
         self.kind = "StringType"
         self.size_in_bits = MAX_BITS
         self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size)
+        self.offset = MAX_BITS // 8
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -125,6 +131,7 @@ class __FUNCTION_TYPE__:
         self.return_type = return_type
         self.args = args
         self.size = MAX_BITS
+        self.offset = MAX_BITS // 8
 
     def __getitem__(self, key):
         return getattr(self, key)
