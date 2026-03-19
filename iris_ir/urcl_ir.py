@@ -3,252 +3,9 @@
 #         pass
 # }
 from typing import Union
-from .urcl_ir_compiler import __COMPILER__
-
-MAX_BITS = 16
-REPR_MODULE_INDENTATION = 2
-
-class __POINTER_TYPE__:
-    def __init__(self, type: object):
-        self.kind = "PointerType"
-        self.to = type
-        self.size_in_bits = MAX_BITS
-        self.offset = MAX_BITS // 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return f"{self.to.as_string()}*"  # type: ignore
-
-
-class __INT_TYPE__:
-    def __init__(self, size: int):
-        self.kind = "IntType"
-        self.size = size
-        self.size_in_bits = size
-        self.offset = size // 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return f"i{self.size}"
-
-
-class __HALF_TYPE__:
-    def __init__(self):
-        self.kind = "HalfType"
-        self.size_in_bits = 16
-        self.offset = 2
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return "half"
-
-
-class __FLOAT_TYPE__:
-    def __init__(self):
-        self.kind = "FloatType"
-        self.size_in_bits = 32
-        self.offset = 4
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return "float"
-
-
-class __DOUBLE_TYPE__:
-    def __init__(self):
-        self.kind = "DoubleType"
-        self.size_in_bits = 64
-        self.offset = 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return "double"
-
-
-class __ARRAY_TYPE__:
-    def __init__(self, of, size: int):
-        self.kind = "ArrayType"
-        self.of = of
-        self.size = size
-        self.size_in_bits = of.size_in_bits * size
-        self.offset = (of.size_in_bits * size) // 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return f"[{self.size} x {self.of.as_string()}]"
-
-
-class __STRING_TYPE__:
-    def __init__(self, size: int = 0):
-        self.kind = "StringType"
-        self.size_in_bits = MAX_BITS
-        self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size)
-        self.offset = MAX_BITS // 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        return self.representation.as_string()
-
-
-class __FUNCTION_TYPE__:
-    def __init__(self, return_type: object, args: list[object]):
-        self.kind = "FunctionType"
-        self.return_type = return_type
-        self.args = args
-        self.size = MAX_BITS
-        self.offset = MAX_BITS // 8
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_pointer(self):
-        return __POINTER_TYPE__(self)
-
-    def as_string(self):
-        representation = f"{self.return_type.as_string()} ("  # type: ignore
-        for index, arg in enumerate(self.args):
-            representation += f"{arg.as_string()}{", " if index + 1 != len(self.args) else ""}"  # type: ignore
-        representation += ")"
-        return representation
-
-
-class __types_CLASS__:
-    def IntType(self, size: int):
-        return __INT_TYPE__(size)
-
-    def HalfType(self):
-        return __HALF_TYPE__()
-
-    def FloatType(self):
-        return __FLOAT_TYPE__()
-
-    def DoubleType(self):
-        return __DOUBLE_TYPE__()
-
-    def StringType(self, size: int = 0):
-        return __STRING_TYPE__(size)
-
-    def ArrayType(self, of: object, size: int):
-        return __ARRAY_TYPE__(of, size)
-
-    def PointerType(self, of: object):
-        return __POINTER_TYPE__(of)
-
-    def FunctionType(self, return_type: object, args: list[object]):
-        return __FUNCTION_TYPE__(return_type, args)
-
-
-class __VALUE__:
-    def __init__(self, type, name):
-        self.kind = "ValueBlock"
-        self.type = type
-        self.name = name
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-
-class __CONSTANT__:
-    def __init__(self, type, value):
-        self.kind = "ConstantBlock"
-        self.type = type
-        self.value = value
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def as_int_str(self):
-        return str(self.value)
-
-    def as_float_str(self):
-        return str(float(self.value))
-
-    def as_array_str(self):
-        representation = "["
-        for index, element in enumerate(self.value):
-            representation += (
-                f"{element.as_string()}{", " if index + 1 != len(self.value) else ""}"
-            )
-        representation += "]"
-        return representation
-
-    def as_string_str(self, display_string_as_array):
-        if not display_string_as_array:
-            representation = "\""
-            for char in self.value:
-                if char in ("\n", "\t", "\"", "\r", "\0", "\\", "\'", "\b", "\f", "\v", "\a", "\00", "\000"):
-                    representation += f"\\{str(ord(char))}"
-                else:
-                    representation += char
-            representation += "\\0\""
-            return representation
-
-        representation = "["
-        inquotes = False
-        for char in self.value:
-            if char in ("\n", "\t", "\"", "\r", "\0", "\\", "\'", "\b", "\f", "\v", "\a", "\00", "\000"):
-                if inquotes == True:
-                    inquotes = False
-                    representation += "\""
-                representation += ", "
-                representation += str(ord(char))
-            else:
-                if inquotes == False:
-                    inquotes = True
-                    representation += f"{", " if representation != "[" else ""}\""
-                representation += char
-        if inquotes == True:
-            inquotes = False
-            representation += "\""
-        representation += ", 0]"
-        return representation
-
-
-    def as_string(self, display_string_as_array = False):
-        if self.type["kind"] == "IntType":
-            return self.as_int_str()
-        elif self.type["kind"] in ("HalfType", "FloatType", "DoubleType"):
-            return self.as_float_str()
-        elif self.type["kind"] == "ArrayType":
-            return self.as_array_str()
-        elif self.type["kind"] == "StringType":
-            return self.as_string_str(display_string_as_array)
-
+from .ir_types import __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
+from .urcl_ir_compiler import __COMPILER__, __format_urcl__
+from typing import TypedDict
 
 class __IR_CLASS__:
     def __init__(self):
@@ -261,7 +18,6 @@ class __IR_CLASS__:
 
 
 ir = __IR_CLASS__()
-
 
 class __BLOCK_CLASS__:
     def __init__(self, parent):
@@ -310,6 +66,18 @@ class __BLOCK_CLASS__:
 
         return block
 
+    def mul(self, left, right, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "MulBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+
+    def div(self, left, right, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "DivBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+
     def get_element_pointer(
         self, pointer, element_type, index: __CONSTANT__, name=None
     ):
@@ -320,7 +88,13 @@ class __BLOCK_CLASS__:
             "index": index,
             "name": name or self.temporary(),
         }
+    
+    def call(self, func, arguments: list, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "CallBlock", "func": func, "args": arguments, "result": identifier}
+        self.blocks.append(block)
 
+        return __TEMPORARY_VALUE__(func["type"].return_type, identifier)
 
 class __MODULE_IR__:
     def __init__(self, blocks: list, data: dict):
@@ -328,21 +102,22 @@ class __MODULE_IR__:
         self.blocks = blocks
         self.data = data
         self.indentation = 0
-        self.stack_frame = []
+        self.stack_frames = []
         self.globals = []
+        self.ssa = []
 
         for block in blocks:
             self.ir(block)
 
     def enter_stack_frame(self):
-        self.stack_frame.append({"kind": "FunctionFrame", "data": {}})
+        self.stack_frames.append({"kind": "FunctionFrame", "data": {}, "ssa": []})
 
     def exit_stack_frame(self):
-        self.stack_frame.pop()
+        self.stack_frames.pop()
 
     def get_stack_frame(self):
-        if len(self.stack_frame) != 0:
-            return self.stack_frame[len(self.stack_frame) - 1]
+        if len(self.stack_frames) != 0:
+            return self.stack_frames[len(self.stack_frames) - 1]
         else:
             return {}
 
@@ -364,13 +139,19 @@ class __MODULE_IR__:
                 return self.constant_ir(block)
             case "ValueBlock":
                 return self.value_ir(block)
-            case "AddBlock" | "SubBlock":
+            case "AddBlock" | "SubBlock" | "MulBlock" | "DivBlock":
                 return self.operator_ir(block)
             case "GetElementPointerBlock":
                 return self.gep_ir(block)
+            case "CallBlock":
+                return self.call_ir(block)
+            case "ArgumentBlock":
+                return f"%{block["name"]}", block["arg"]
+            case "TemporaryBlock":
+                return self.temp_ir(block)
 
-    def write(self, text: str):
-        self.module += f"{" "*(self.indentation * REPR_MODULE_INDENTATION)}{text}"
+    def write(self, text: str, respect_indentation: bool = False):
+        self.module += f"{" "*REPR_MODULE_INDENTATION if respect_indentation else ""}{text}"
 
     def writeln(self, text: str):
         self.module += f"{" "*(self.indentation * REPR_MODULE_INDENTATION)}{text}\n"
@@ -390,7 +171,7 @@ class __MODULE_IR__:
             self.writeln(f"#{block["header_kind"]} == {block["value"]}")
 
     def global_memory_block(self, block):
-        if len(self.stack_frame) != 0:
+        if len(self.stack_frames) != 0:
             return f"@{block["name"]}", block["type"]
         if block["name"] in self.globals:
             return f"@{block["name"]}", block["type"]
@@ -429,15 +210,26 @@ class __MODULE_IR__:
                 )
             frame["data"][block["memory"].name]["initialized"] = True
             value, type = self.ir(block["value"])  # type: ignore
-            name, alloc_type = self.ir(block["memory"]) # type: ignore
+            name, alloc_type = self.ir(block["memory"])  # type: ignore
             self.writeln(
                 f"store {type.as_string()} {value}, {alloc_type.as_pointer().as_string()} {name}"  # type: ignore
             )
 
     def function_ir(self, block):
-        self.write(f"func {block["name"]} {block["type"].as_string()}")
+        if len(self.stack_frames) != 0:
+            return block["name"], block["type"]
         if block["block"] == None:
-            return
+            return block["name"], block["type"]
+
+        self.write(f"func {block["name"]} {block["type"].return_type.as_string()} (")
+        for index, arg in enumerate(block["args"]):
+             self.write(f"{arg["arg"].as_string()} {arg["name"]}{", " if index + 1 != len(block["args"]) else ""}")  # type: ignore
+        
+        self.write(")")
+        if len(block["block"].blocks) == 0:
+            self.writeln("")
+            return block["name"], block["type"]
+
         self.writeln(" {")
         self.inc_indentation()
         self.enter_stack_frame()
@@ -446,13 +238,14 @@ class __MODULE_IR__:
         self.exit_stack_frame()
         self.dec_indentation()
         self.writeln("}")
+        return block["name"], block["type"]
 
     def ret_ir(self, block):
-        value, type = self.ir(block["value"])  # type: ignore
-        self.writeln(f"ret {type.as_string()} {value}")  # type: ignore
+        value, value_type = self.ir(block["value"])  # type: ignore
+        self.writeln(f"ret {value_type.as_string()} {self.get_symbol_from_name(value) if type(block["value"]) != __CONSTANT__ else ""}{value}")  # type: ignore
 
     def get_symbol(self):
-        return "@" if len(self.stack_frame) == 0 else "%"
+        return "@" if len(self.stack_frames) == 0 else "%"
 
     def operator_ir(self, block):
         left_value, left_type = self.ir(block["left"])  # type: ignore
@@ -467,7 +260,18 @@ class __MODULE_IR__:
                 self.writeln(
                     f"{symbol}{block["result"]} = sub {left_type.as_string()} {left_value}, {right_value}"
                 )
-        return block["result"], left_type
+
+            case "MulBlock":
+                self.writeln(
+                    f"{symbol}{block["result"]} = mul {left_type.as_string()} {left_value}, {right_value}"
+                )
+
+            case "DivBlock":
+                self.writeln(
+                    f"{symbol}{block["result"]} = div {left_type.as_string()} {left_value}, {right_value}"
+                )
+
+        return self.get_symbol() + block["result"], left_type
 
     def gep_ir(self, block):
         pointer, pointer_type = self.ir(block["pointer"])
@@ -475,8 +279,39 @@ class __MODULE_IR__:
         self.writeln(
             f"{self.get_symbol()}{block["name"]} = getelementptr {pointer_type.as_string()} {pointer}, {index_type.as_string()} {index}"
         )
-        return self.get_symbol_from_name(block["name"]) + block["name"], block["element_type"]
+        return (
+            self.get_symbol_from_name(block["name"]) + block["name"],
+            block["element_type"],
+        )
+    
+    def call_ir(self, block):
+        func_name, func_type = self.ir(block["func"])
+        self.write(f"{self.get_symbol()}{block["result"]} = call {func_type["return_type"].as_string()} @{func_name}(", True)
+        for index, arg in enumerate(block["args"]):
+            value, value_type = self.ir(arg) # type: ignore
+            self.write(f"{value_type.as_string()} {value}{", " if index + 1 != len(block["args"]) else ""}")
+        self.write(")")
+        self.writeln("")
+        return "%" + block["result"], func_type["return_type"]
+    
+    def temp_ir(self, block):
+        if len(self.stack_frames) != 0:
+            stack_frame = self.get_stack_frame()
+            if block.name in stack_frame["ssa"]:
+                return "%" + block.name, block.type
+            stack_frame["ssa"].append(block.name)
+            return "%" + block.name, block.type
+        else:
+            if block.name in self.ssa:
+                return "@" + block.name, block.type
+            else:
+                self.ssa.append(block.name)
+                return "@" + block.name, block.type
 
+class TYPEDEF_FUNCTION_BLOCK(TypedDict):
+    name: str
+    block: __BLOCK_CLASS__
+    args: list[TYPEDEF_FUNCTION_ARGUMENT]
 
 class __MODULE_CLASS__:
     def __init__(self):
@@ -486,12 +321,11 @@ class __MODULE_CLASS__:
 
     def __getitem__(self, key):
         return getattr(self, key)
-    
-    def compile(self):
-        return __COMPILER__(self.blocks).urcl
 
-    @property
-    def module(self):
+    def compile(self):
+        return __format_urcl__(__COMPILER__(self.blocks).urcl)
+
+    def __str__(self):
         return __MODULE_IR__(self.blocks, self.data).module
 
     def create_function(
@@ -500,7 +334,7 @@ class __MODULE_CLASS__:
         type: __FUNCTION_TYPE__,
         name: str,
         args: list[object],
-    ):
+    ) -> TYPEDEF_FUNCTION_BLOCK:
         function_block = {
             "kind": "FunctionBlock",
             "block": block,
@@ -510,20 +344,39 @@ class __MODULE_CLASS__:
         }
 
         for index in range(len(args)):
-            function_block["args"][index] = {"arg": args[index], "name": ""}
+            function_block["args"].append({"kind": "ArgumentBlock", "arg": args[index], "name": block.temporary()}) # type: ignore
 
         self.blocks.append(function_block)
-        return function_block
+        return function_block # type: ignore
+    
+    def call(self, func, arguments: list, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "CallBlock", "func": func, "args": arguments, "result": identifier}
+        self.blocks.append(block)
+
+        return __TEMPORARY_VALUE__(func["type"].return_type, identifier)
 
     def add(self, left, right, name=None):
         identifier = name or self.temporary()
-        self.blocks.append(
-            {"kind": "AddBlock", "left": left, "right": right, "result": identifier}
-        )
+        block = {"kind": "AddBlock", "left": left, "right": right, "result": identifier}
+
+        return block
 
     def sub(self, left, right, name=None):
         identifier = name or self.temporary()
         block = {"kind": "SubBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+
+    def mul(self, left, right, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "MulBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+
+    def div(self, left, right, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "DivBlock", "left": left, "right": right, "result": identifier}
 
         return block
 
@@ -568,7 +421,7 @@ class __MODULE_CLASS__:
         self,
         run="ROM",
         bits=("==", 16),
-        min_reg=16,
+        min_reg=26,
         min_heap=64,
         min_stack=16,
     ):

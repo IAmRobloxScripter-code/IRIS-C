@@ -4,32 +4,28 @@ module = ir.create_module()
 module.set_header(bits=("==", 16))
 
 stdint = ir.types.IntType(8)
-# char = ir.types.IntType(8)
 
-function_type = ir.types.FunctionType(stdint, [])
-builder = module.create_block()
-function_data = module.create_function(builder, function_type, "main", [])
 
-# hwstr = module.create_global_string("Hello World!")
-# foo = builder.alloc(char.as_pointer())
-# builder.store(builder.get_element_pointer(hwstr, char.as_pointer(), ir.constant(stdint, 0)), foo)
+main_function_type = ir.types.FunctionType(stdint, [])
+main_builder = module.create_block()
+main_function = module.create_function(main_builder, main_function_type, "main", [])
 
-a = builder.alloc(stdint)
-builder.store(ir.constant(stdint, 100), a)
+array_type = ir.types.ArrayType(stdint, 3)
+array = main_builder.alloc(array_type)
+main_builder.store(
+    ir.constant(
+        array_type,
+        [ir.constant(stdint, 100), ir.constant(stdint, 200), ir.constant(stdint, 300)],
+    ),
+    array,
+)
 
-b = builder.alloc(stdint)
-builder.store(ir.constant(stdint, 200), b)
+value = main_builder.alloc(stdint)
+main_builder.store(main_builder.get_element_pointer(array, stdint, ir.constant(stdint, 0)), value)
 
-c = builder.alloc(stdint)
-builder.store(ir.constant(stdint, 600), c)
-
-d = builder.alloc(stdint)
-builder.store(builder.add(builder.sub(c, a), b), d)
-
-# 600 - 100 + 200
-
-builder.ret(ir.constant(stdint, 0))
-
-print(module.module)
-print("-"*60)
-print(module.compile())
+main_builder.ret(ir.constant(stdint, 0))
+print(module)
+print("-" * 60)
+with open("result.urcl", "w") as result:
+    result.write(module.compile())
+    result.close()
