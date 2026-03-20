@@ -102,6 +102,10 @@ class __COMPILER__:
                 return self.compile_temp_block(block)
             case "GetElementPointerBlock":
                 return self.compile_gep_block(block)
+            case "AddressBlock":
+                return self.compile_address_block(block)
+            case "LoadValueBlock":
+                return self.compile_load_block(block)
 
     def compile_header(self, block):
         kind = block["header_kind"]
@@ -120,7 +124,7 @@ class __COMPILER__:
             return f".{block["name"]}"
         self.writeln(f".{block["name"]}")
         self.writeln(f"DW {self.compile(block["initializer"])}")
-
+        self.writeln("NOP")
         return f".{block["name"]}"
 
     def get_free_register(self):
@@ -196,9 +200,9 @@ class __COMPILER__:
             return
 
         value = self.compile(block["value"])
-        offset = block["memory"].type.offset
+        offset = block["memory"].value.type.offset
         frame["stack_address"] += offset
-        if block["memory"].type["kind"] == "ArrayType":
+        if block["memory"].value.type["kind"] == "ArrayType":
             self.compile_array(frame, block["value"])
         else:
             self.writeln(
@@ -306,6 +310,23 @@ class __COMPILER__:
                 return frame["ssa_registers"][block.name]
             else:
                 return self.ssa_registers[block.name]
+            
+    def compile_address_block(self, block):
+        name = block.name
+        frame = self.get_stack_frame()
+        if not frame:
+            return None
+
+        data = frame["variables"][name]
+
+        register = self.get_free_register()
+        self.occupy_register(register)
+
+        self.writeln(
+            f"SUB {register} {self.get_register_name("stack_address")} {data["stack_offset"]}"
+        )
+
+        return register
 
     def compile_gep_block(self, block):
         """
@@ -317,21 +338,35 @@ class __COMPILER__:
                 "name": name or self.temporary(),
             }
         """
-        pointer_value = self.compile(block["pointer"])
+
+        pointer = block["pointer"]
+        if pointer["kind"] == "ValueBlock":
+            base_pointer = self.compile_address_block(pointer)
+        else:
+            base_pointer = self.compile(pointer)
+
         index_value = self.compile(block["index"])
         index_register = self.get_free_register()
         self.occupy_register(index_register)
         self.writeln(f"MOV {index_register} {index_value}")
         offset_register = self.get_free_register()
         self.occupy_register(offset_register)
-        self.writeln(f"MUL {offset_register} {index_register} {block["element_type"].offset}")
+        self.writeln(f"MLT {offset_register} {index_register} {block["element_type"].offset}")
         register = self.get_free_register()
-        self.writeln(f"LLOD {register} {pointer_value} {offset_register}")
-        self.free_register(pointer_value)
+        self.writeln(f"ADD {register} {base_pointer} {offset_register}")
+        self.free_register(base_pointer)
         self.free_register(index_value)
         self.free_register(offset_register)
         self.occupy_register(register)
 
+        return register
+    
+    def compile_load_block(self, block):
+        pointer = self.compile(block["pointer"])
+        register = self.get_free_register()
+        self.writeln(f"LOD {register} {pointer}")
+        self.occupy_register(register)
+        self.free_register(pointer)
         return register
 
     def get_type(self, block):
@@ -355,3 +390,5 @@ class __COMPILER__:
                 return func_type.return_type
             case "TemporaryBlock":
                 return block.type
+            case "GetElementPointerBlock":
+                return block["pointer"].type

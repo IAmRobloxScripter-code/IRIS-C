@@ -3,7 +3,7 @@
 #         pass
 # }
 from typing import Union
-from .ir_types import __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
+from .ir_types import __ADDRESS__, __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
 from .urcl_ir_compiler import __COMPILER__, __format_urcl__
 from typing import TypedDict
 
@@ -40,13 +40,14 @@ class __BLOCK_CLASS__:
     def alloc(self, type, name=None):
         identifier = name or self.temporary()
         value = __VALUE__(type, identifier)
+        address = __ADDRESS__(type, identifier, value)
         self.blocks.append({"kind": "AllocBlock", "type": type, "result": value})
         self.stack[identifier] = {
             "kind": "AllocatedMemoryBlock",
             "type": type,
             "value": value,
         }
-        return value
+        return address
 
     def store(self, value, memory):
         self.blocks.append({"kind": "StoreBlock", "memory": memory, "value": value})
@@ -95,6 +96,12 @@ class __BLOCK_CLASS__:
         self.blocks.append(block)
 
         return __TEMPORARY_VALUE__(func["type"].return_type, identifier)
+    
+    def load(self, pointer):
+        return {
+            "kind": "LoadValueBlock",
+            "pointer": pointer
+        }
 
 class __MODULE_IR__:
     def __init__(self, blocks: list, data: dict):
@@ -149,6 +156,10 @@ class __MODULE_IR__:
                 return f"%{block["name"]}", block["arg"]
             case "TemporaryBlock":
                 return self.temp_ir(block)
+            case "AddressBlock":
+                return self.address_ir(block)
+            case "LoadValueBlock":
+                return self.load_ir(block)
 
     def write(self, text: str, respect_indentation: bool = False):
         self.module += f"{" "*REPR_MODULE_INDENTATION if respect_indentation else ""}{text}"
@@ -176,7 +187,7 @@ class __MODULE_IR__:
         if block["name"] in self.globals:
             return f"@{block["name"]}", block["type"]
         self.writeln(
-            f"global {block["name"]} = {block["type"].as_string()}, {block["initializer"].as_string()}"
+            f"global @{block["name"]} = {block["type"].as_string()}, {block["initializer"].as_string()}"
         )
         self.globals.append(block["name"])
         return f"@{block["name"]}", block["type"]
@@ -203,16 +214,17 @@ class __MODULE_IR__:
 
     def store_ir(self, block):
         frame = self.get_stack_frame()
-        if block["memory"].name in frame["data"]:
-            if not frame["data"][block["memory"].name]["initialized"]:
+        memory = block["memory"]
+        if memory.name in frame["data"]:
+            if not frame["data"][memory.name]["initialized"]:
                 self.writeln(
-                    f"%{block["memory"].name} = alloc {block["memory"].type.as_string()}"
+                    f"%{memory.name} = alloc {memory.value.type.as_string()}"
                 )
-            frame["data"][block["memory"].name]["initialized"] = True
+            frame["data"][memory.name]["initialized"] = True
             value, type = self.ir(block["value"])  # type: ignore
-            name, alloc_type = self.ir(block["memory"])  # type: ignore
+            name, alloc_type = self.ir(memory)  # type: ignore
             self.writeln(
-                f"store {type.as_string()} {value}, {alloc_type.as_pointer().as_string()} {name}"  # type: ignore
+                f"store {type.as_string()} {value}, {alloc_type.as_string()} {name}"  # type: ignore
             )
 
     def function_ir(self, block):
@@ -307,6 +319,13 @@ class __MODULE_IR__:
             else:
                 self.ssa.append(block.name)
                 return "@" + block.name, block.type
+    
+    def address_ir(self, block):
+        return "%" + block.name, block.type
+    
+    def load_ir(self, block):
+        result, result_type = self.ir(block["pointer"])
+        return result, result_type
 
 class TYPEDEF_FUNCTION_BLOCK(TypedDict):
     name: str
@@ -389,6 +408,12 @@ class __MODULE_CLASS__:
             "pointer": pointer,
             "index": index,
             "name": name or self.temporary(),
+        }
+    
+    def load(self, pointer):
+        return {
+            "kind": "LoadValueBlock",
+            "pointer": pointer
         }
 
     def global_variable(self, name, type: object, initializer: __CONSTANT__):

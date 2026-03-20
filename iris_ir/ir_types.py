@@ -180,6 +180,17 @@ class __VALUE__:
         return getattr(self, key)
 
 
+class __ADDRESS__:
+    def __init__(self, type, name, value: __VALUE__):
+        self.kind = "AddressBlock"
+        self.type = type.as_pointer()
+        self.name = name
+        self.value = value
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+
 class __CONSTANT__:
     def __init__(self, type, value):
         self.kind = "ConstantBlock"
