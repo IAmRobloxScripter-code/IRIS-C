@@ -3,7 +3,7 @@
 #         pass
 # }
 from typing import Union
-from .ir_types import __ADDRESS__, __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
+from .ir_types import __STRUCT_TYPE__, CMP_OPERATORS, __ADDRESS__, __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
 from .urcl_ir_compiler import __COMPILER__, __format_urcl__
 from typing import TypedDict
 
@@ -31,7 +31,9 @@ class __BLOCK_CLASS__:
         return getattr(self, key)
 
     def create_block(self):
-        return __BLOCK_CLASS__(self)
+        new_block = __BLOCK_CLASS__(self)
+        new_block.temporary_count = self.temporary_count
+        return new_block
 
     def temporary(self):
         self.temporary_count += 1
@@ -91,6 +93,9 @@ class __BLOCK_CLASS__:
         }
     
     def call(self, func, arguments: list, name=None):
+        print(func["kind"])
+        if func["type"]["kind"] == "PointerType":
+            func = self.load_imm(func)
         identifier = name or self.temporary()
         block = {"kind": "CallBlock", "func": func, "args": arguments, "result": identifier}
         self.blocks.append(block)
@@ -102,6 +107,24 @@ class __BLOCK_CLASS__:
             "kind": "LoadValueBlock",
             "pointer": pointer
         }
+    
+    def load_imm(self, pointer):
+        return pointer.value
+    
+    def label(self, block, name = None):
+        identifier = name or f"LABEL_{self.temporary()}"
+        self.blocks.append({"kind": "LabelDefineBlock", "block": block, "label": identifier})
+        return {"kind": "LabelBlock", "label": identifier}
+
+    def jump(self, where):
+        self.blocks.append({"kind": "JumpBlock", "label": where})
+
+    def compare(self, operator, a, b, name = None):
+        identifier = name or self.temporary()
+        return {"kind": "CompareBlock", "operator": operator, "left": a, "right": b, "result": identifier}
+    
+    def branch(self, condition, then_label, else_label):
+        self.blocks.append({"kind": "BranchBlock", "condition": condition, "then": then_label, "else": else_label})
 
 class __MODULE_IR__:
     def __init__(self, blocks: list, data: dict):
@@ -160,7 +183,17 @@ class __MODULE_IR__:
                 return self.address_ir(block)
             case "LoadValueBlock":
                 return self.load_ir(block)
-
+            case "LabelBlock":
+                return f".{block["label"]}"
+            case "LabelDefineBlock":
+                return self.label_define_ir(block)
+            case "JumpBlock":
+                self.writeln(f"jump {self.ir(block["label"])}")
+            case "CompareBlock":
+                return self.compare_ir(block)
+            case "BranchBlock":
+                return self.branch_ir(block)
+            
     def write(self, text: str, respect_indentation: bool = False):
         self.module += f"{" "*REPR_MODULE_INDENTATION if respect_indentation else ""}{text}"
 
@@ -250,7 +283,7 @@ class __MODULE_IR__:
         self.exit_stack_frame()
         self.dec_indentation()
         self.writeln("}")
-        return block["name"], block["type"]
+        return "@" + block["name"], block["type"]
 
     def ret_ir(self, block):
         value, value_type = self.ir(block["value"])  # type: ignore
@@ -298,10 +331,10 @@ class __MODULE_IR__:
     
     def call_ir(self, block):
         func_name, func_type = self.ir(block["func"])
-        self.write(f"{self.get_symbol()}{block["result"]} = call {func_type["return_type"].as_string()} @{func_name}(", True)
+        self.write(f"{self.get_symbol()}{block["result"]} = call {func_type["return_type"].as_string()} {func_name}(", True)
         for index, arg in enumerate(block["args"]):
             value, value_type = self.ir(arg) # type: ignore
-            self.write(f"{value_type.as_string()} {value}{", " if index + 1 != len(block["args"]) else ""}")
+            self.write(f"{value_type.as_string()} {value}{", " if index + 1 != len(block["args"]) else ""}") # type: ignore
         self.write(")")
         self.writeln("")
         return "%" + block["result"], func_type["return_type"]
@@ -326,6 +359,28 @@ class __MODULE_IR__:
     def load_ir(self, block):
         result, result_type = self.ir(block["pointer"])
         return result, result_type
+    
+    def compare_ir(self, block):
+        left_value, left_type = self.ir(block["left"])  # type: ignore
+        right_value, right_type = self.ir(block["right"])  # type: ignore
+        symbol = self.get_symbol()
+        self.writeln(f"{symbol}{block["result"]} = cmp {CMP_OPERATORS[block["operator"]]} {left_type.as_string()} {left_value}, {right_value}")
+        return f"{symbol}{block["result"]}", left_type
+    
+    def branch_ir(self, block):
+        condition, condition_type = self.ir(block["condition"])
+        self.writeln(f"jit {condition}, {self.ir(block["then"])}")
+        self.writeln(f"jif {condition}, {self.ir(block["else"])}")
+
+    def label_define_ir(self, block):
+        self.writeln(f".{block["label"]}:")
+        if not block["block"]:
+            return
+        self.inc_indentation()
+        for nested_block in block["block"].blocks:
+            self.ir(nested_block)
+        self.dec_indentation()
+        
 
 class TYPEDEF_FUNCTION_BLOCK(TypedDict):
     name: str
@@ -353,7 +408,10 @@ class __MODULE_CLASS__:
         type: __FUNCTION_TYPE__,
         name: str,
         args: list[object],
+        reset_temp_count = True,
     ) -> TYPEDEF_FUNCTION_BLOCK:
+        if block and reset_temp_count == True:
+            block.temporary_count = 0
         function_block = {
             "kind": "FunctionBlock",
             "block": block,
@@ -398,6 +456,14 @@ class __MODULE_CLASS__:
         block = {"kind": "DivBlock", "left": left, "right": right, "result": identifier}
 
         return block
+    
+    def label(self, block, name = None):
+        identifier = name or f"LABEL_{self.temporary()}"
+        self.blocks.append({"kind": "LabelDefineBlock", "block": block, "label": identifier})
+        return {"kind": "LabelBlock", "label": identifier}
+
+    def jump(self, where):
+        self.blocks.append({"kind": "JumpBlock", "label": where})
 
     def get_element_pointer(
         self, pointer, element_type, index: __CONSTANT__, name=None
@@ -415,6 +481,9 @@ class __MODULE_CLASS__:
             "kind": "LoadValueBlock",
             "pointer": pointer
         }
+    
+    def load_imm(self, pointer):
+        return pointer.value
 
     def global_variable(self, name, type: object, initializer: __CONSTANT__):
         identifier = name or self.temporary()
@@ -436,11 +505,30 @@ class __MODULE_CLASS__:
         )
 
     def create_block(self):
-        return __BLOCK_CLASS__(self)
+        new_block = __BLOCK_CLASS__(self)
+        new_block.temporary_count = self.temporary_count
+        return new_block
 
     def temporary(self):
         self.temporary_count += 1
         return str(self.temporary_count)
+    
+    def compare(self, operator, a, b, name = None):
+        identifier = name or self.temporary()
+        return {"kind": "CompareBlock", "operator": operator, "left": a, "right": b, "result": identifier}
+
+    def jump_eq(self, where):
+        self.blocks.append({"kind": "JumpEqBlock", "label": where})
+
+    def jump_neq(self, where):
+        self.blocks.append({"kind": "JumpNeqBlock", "label": where})
+
+    def branch(self, condition, then_label, else_label):
+        self.blocks.append({"kind": "BranchBlock", "condition": condition, "then": then_label, "else": else_label})
+
+    def struct(self, struct_type: __STRUCT_TYPE__, name = None):
+        identifier = name or self.temporary()
+
 
     def set_header(
         self,

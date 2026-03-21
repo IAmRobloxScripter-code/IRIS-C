@@ -21,6 +21,7 @@ class __COMPILER__:
         self.globals = {}
         self.ssa_registers = {}
         self.urcl = ""
+        self.word_size = 0
         entry = False
         headers = 0
         for block in blocks:
@@ -106,12 +107,23 @@ class __COMPILER__:
                 return self.compile_address_block(block)
             case "LoadValueBlock":
                 return self.compile_load_block(block)
+            case "LabelDefineBlock":
+                return self.compile_label_define_block(block)
+            case "LabelBlock":
+                return f".{block["label"]}"
+            case "JumpBlock":
+                self.writeln(f"JMP {self.compile(block["label"])}")
+            case "CompareBlock":
+                return self.compile_compare_block(block)
+            case "BranchBlock":
+                return self.compile_branch_block(block)
 
     def compile_header(self, block):
         kind = block["header_kind"]
         if kind == "run":
             self.writeln(f"RUN {block["value"].upper()}")
         elif kind == "bits":
+            self.word_size = block["value"][1]
             self.writeln(f"BITS {(block["value"][0])} {block["value"][1]}")
         elif kind in ("minheap", "minreg", "minstack"):
             self.writeln(f"{kind.upper()} {block["value"]}")
@@ -200,19 +212,24 @@ class __COMPILER__:
             return
 
         value = self.compile(block["value"])
-        offset = block["memory"].value.type.offset
-        frame["stack_address"] += offset
+        offset = None;
+
+        if not block["memory"].name in frame["variables"]:
+            offset = block["memory"].value.type.offset
+            frame["stack_address"] += offset
+            
         if block["memory"].value.type["kind"] == "ArrayType":
             self.compile_array(frame, block["value"])
         else:
             self.writeln(
                 f"LSTR {self.get_register_name("stack_address")} -{frame["stack_address"]} {value}"
             )
-
-        frame["variables"][block["memory"].name] = {
-            "stack_offset": frame["stack_address"],
-            "offset": offset,
-        }
+            
+        if not block["memory"].name in frame["variables"]:
+            frame["variables"][block["memory"].name] = {
+                "stack_offset": frame["stack_address"],
+                "offset": offset,
+            }
 
         self.free_register(value)
 
@@ -368,6 +385,45 @@ class __COMPILER__:
         self.occupy_register(register)
         self.free_register(pointer)
         return register
+    
+    def compile_compare_block(self, block):
+        operator = block["operator"]
+        left = self.compile(block["left"])
+        right = self.compile(block["right"])
+        result_register = self.get_free_register()
+        match operator:
+            case "==":
+                self.writeln(f"SETE {result_register} {left} {right}")
+            case "!=":
+                self.writeln(f"SETNE {result_register} {left} {right}")                
+            case ">=":
+                self.writeln(f"SETGE {result_register} {left} {right}")
+            case "<=":
+                self.writeln(f"SETLE {result_register} {left} {right}")                
+            case ">":
+                self.writeln(f"SETG {result_register} {left} {right}")
+            case "<":
+                self.writeln(f"SETL {result_register} {left} {right}")                
+
+        self.occupy_register(result_register)
+        return result_register
+    
+    def compile_label_define_block(self, block):
+        self.writeln(f".{block["label"]}")
+        if not block["block"]:
+            return
+        for nested_block in block["block"].blocks:
+            self.compile(nested_block)
+
+    def compile_branch_block(self, block):
+        then_label = self.compile(block["then"])
+        else_label = self.compile(block["else"])
+        condition_result = self.compile(block["condition"])
+        self.writeln(f"BRE {then_label} {condition_result} {2 ** self.word_size - 1}")
+        self.writeln(f"BRE {else_label} {condition_result} 0")
+        self.free_register(condition_result)
+        self.free_register(then_label)
+        self.free_register(else_label)
 
     def get_type(self, block):
         match block["kind"]:

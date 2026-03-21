@@ -10,7 +10,7 @@ class __POINTER_TYPE__:
         self.kind = "PointerType"
         self.to = type
         self.size_in_bits = MAX_BITS
-        self.offset = MAX_BITS // 8
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -27,7 +27,7 @@ class __INT_TYPE__:
         self.kind = "IntType"
         self.size = size
         self.size_in_bits = size
-        self.offset = size // 8
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -43,7 +43,7 @@ class __HALF_TYPE__:
     def __init__(self):
         self.kind = "HalfType"
         self.size_in_bits = 16
-        self.offset = 2
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -59,7 +59,7 @@ class __FLOAT_TYPE__:
     def __init__(self):
         self.kind = "FloatType"
         self.size_in_bits = 32
-        self.offset = 4
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -75,7 +75,7 @@ class __DOUBLE_TYPE__:
     def __init__(self):
         self.kind = "DoubleType"
         self.size_in_bits = 64
-        self.offset = 8
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -110,7 +110,7 @@ class __STRING_TYPE__:
         self.kind = "StringType"
         self.size_in_bits = MAX_BITS
         self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size)
-        self.offset = MAX_BITS // 8
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -127,8 +127,8 @@ class __FUNCTION_TYPE__:
         self.kind = "FunctionType"
         self.return_type = return_type
         self.args = args
-        self.size = MAX_BITS
-        self.offset = MAX_BITS // 8
+        self.size = 1
+        self.offset = 1
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -143,6 +143,29 @@ class __FUNCTION_TYPE__:
         representation += ")"
         return representation
 
+class __STRUCT_TYPE__:
+    def __init__(self, members: list[object]) -> None:
+        self.kind = "StructType"
+        self.members = members
+        self.size = 0
+        self.offset = 0
+        for member in members:
+            if member.offset > self.offset: # type: ignore
+                self.offset = member.offset # type: ignore
+            self.size += member.size  # type: ignore
+
+        def __getitem__(self, key):
+            return getattr(self, key)
+
+    def as_pointer(self):
+        return __POINTER_TYPE__(self)
+    
+    def as_string(self):
+        representation = "["
+        for index, member in enumerate(self.members):
+            representation += f"{member.as_string()}{", " if index + 1 != len(self.members) else ""}" # type: ignore
+        representation += "]"
+        return representation
 
 class __types_CLASS__:
     def IntType(self, size: int):
@@ -168,6 +191,9 @@ class __types_CLASS__:
 
     def FunctionType(self, return_type: object, args: list[object]):
         return __FUNCTION_TYPE__(return_type, args)
+    
+    def StructType(self, members: list[object]):
+        return __STRUCT_TYPE__(members)
 
 
 class __VALUE__:
@@ -298,3 +324,13 @@ class __TEMPORARY_VALUE__:
 
     def __getitem__(self, key):
         return getattr(self, key)
+
+
+CMP_OPERATORS = {
+    "==": "eq",
+    "!=": "neq",
+    ">": "gt",
+    "<": "lt",
+    ">=": "gte",
+    "<=": "lte",
+}
