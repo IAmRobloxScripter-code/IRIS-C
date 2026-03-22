@@ -108,8 +108,9 @@ class __ARRAY_TYPE__:
 class __STRING_TYPE__:
     def __init__(self, size: int = 0):
         self.kind = "StringType"
-        self.size_in_bits = MAX_BITS
+        self.size = size
         self.representation = __ARRAY_TYPE__(__INT_TYPE__(8), size)
+        self.size_in_bits = MAX_BITS
         self.offset = 1
 
     def __getitem__(self, key):
@@ -126,6 +127,7 @@ class __FUNCTION_TYPE__:
     def __init__(self, return_type: object, args: list[object]):
         self.kind = "FunctionType"
         self.return_type = return_type
+        self.size_in_bits = MAX_BITS
         self.args = args
         self.size = 1
         self.offset = 1
@@ -147,21 +149,22 @@ class __STRUCT_TYPE__:
     def __init__(self, members: list[object]) -> None:
         self.kind = "StructType"
         self.members = members
-        self.size = 0
+        self.size = 1
+        self.size_in_bits = 0 
         self.offset = 0
         for member in members:
             if member.offset > self.offset: # type: ignore
                 self.offset = member.offset # type: ignore
-            self.size += member.size  # type: ignore
+            self.size_in_bits += member.size_in_bits  # type: ignore
 
-        def __getitem__(self, key):
-            return getattr(self, key)
+    def __getitem__(self, key):
+        return getattr(self, key)
 
     def as_pointer(self):
         return __POINTER_TYPE__(self)
     
     def as_string(self):
-        representation = "["
+        representation = "struct ["
         for index, member in enumerate(self.members):
             representation += f"{member.as_string()}{", " if index + 1 != len(self.members) else ""}" # type: ignore
         representation += "]"
@@ -232,11 +235,12 @@ class __CONSTANT__:
     def as_float_str(self):
         return str(float(self.value))
 
-    def as_array_str(self):
+    def as_array_str(self, module_ir):
         representation = "["
         for index, element in enumerate(self.value):
+            value, value_type = module_ir.ir(element)
             representation += (
-                f"{element.as_string()}{", " if index + 1 != len(self.value) else ""}"
+                f"{value}{", " if index + 1 != len(self.value) else ""}"
             )
         representation += "]"
         return representation
@@ -299,16 +303,26 @@ class __CONSTANT__:
             representation += '"'
         representation += ", 0]"
         return representation
+    
+    def as_string_struct(self, module_ir):
+        representation = "["
+        for index, member in enumerate(self.value):
+            value, value_type = module_ir.ir(member)
+            representation += f"{value}{", " if index + 1 != len(self.value) else ""}"
+        representation += "]"
+        return representation
 
-    def as_string(self, display_string_as_array=False):
+    def as_string(self, display_string_as_array=False, module_ir = None):
         if self.type["kind"] == "IntType":
             return self.as_int_str()
         elif self.type["kind"] in ("HalfType", "FloatType", "DoubleType"):
             return self.as_float_str()
         elif self.type["kind"] == "ArrayType":
-            return self.as_array_str()
+            return self.as_array_str(module_ir)
         elif self.type["kind"] == "StringType":
             return self.as_string_str(display_string_as_array)
+        elif self.type["kind"] == "StructType":
+            return self.as_string_struct(module_ir)
 
 
 class TYPEDEF_FUNCTION_ARGUMENT(TypedDict):

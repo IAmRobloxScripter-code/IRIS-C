@@ -13,6 +13,12 @@ class __IR_CLASS__:
 
     def create_module(self) -> "__MODULE_CLASS__": ...
 
+    def typeof(self, block):
+        if hasattr(block, "type") or "type" in block:
+            return block["type"]
+        else:
+            return block["kind"]
+
     def constant(self, type: object, value):
         return __CONSTANT__(type, value)
 
@@ -193,6 +199,8 @@ class __MODULE_IR__:
                 return self.compare_ir(block)
             case "BranchBlock":
                 return self.branch_ir(block)
+            case "StructTypeBlock":
+                return self.struct_type_ir(block)
             
     def write(self, text: str, respect_indentation: bool = False):
         self.module += f"{" "*REPR_MODULE_INDENTATION if respect_indentation else ""}{text}"
@@ -237,7 +245,7 @@ class __MODULE_IR__:
         return "%" + block["result"].name, block["result"].type
 
     def constant_ir(self, block):
-        return block.as_string(), block.type
+        return block.as_string(module_ir=self), block.type
 
     def value_ir(self, block):
         return f"%{block.name}", block.type
@@ -380,7 +388,18 @@ class __MODULE_IR__:
         for nested_block in block["block"].blocks:
             self.ir(nested_block)
         self.dec_indentation()
+
+    def struct_type_ir(self, block):
+        if len(self.stack_frames) != 0:
+            return f"@{block["name"]}", block["type"]
+        if block["name"] in self.globals:
+            return f"@{block["name"]}", block["type"]
         
+        self.writeln(f"global @{block["name"]} = {block["type"].as_string()}")
+        
+        self.globals.append(block["name"])
+        return f"@{block["name"]}", block["type"]
+
 
 class TYPEDEF_FUNCTION_BLOCK(TypedDict):
     name: str
@@ -525,10 +544,6 @@ class __MODULE_CLASS__:
 
     def branch(self, condition, then_label, else_label):
         self.blocks.append({"kind": "BranchBlock", "condition": condition, "then": then_label, "else": else_label})
-
-    def struct(self, struct_type: __STRUCT_TYPE__, name = None):
-        identifier = name or self.temporary()
-
 
     def set_header(
         self,

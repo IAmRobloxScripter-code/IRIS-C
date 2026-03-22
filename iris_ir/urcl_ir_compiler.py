@@ -18,7 +18,7 @@ class __COMPILER__:
     def __init__(self, blocks):
         self.blocks = blocks
         self.stack_frame = []
-        self.globals = {}
+        self.globals = []
         self.ssa_registers = {}
         self.urcl = ""
         self.word_size = 0
@@ -117,6 +117,8 @@ class __COMPILER__:
                 return self.compile_compare_block(block)
             case "BranchBlock":
                 return self.compile_branch_block(block)
+            case "StructTypeBlock":
+                return self.compile_struct_type_block(block)
 
     def compile_header(self, block):
         kind = block["header_kind"]
@@ -129,15 +131,29 @@ class __COMPILER__:
             self.writeln(f"{kind.upper()} {block["value"]}")
 
     def compile_constant(self, block):
+        if len(self.stack_frame) != 0 and block.type["kind"] == "StructType":
+            self.compile_struct(block)
         return block.as_string(True)
 
     def compile_global_memory_block(self, block):
         if len(self.stack_frame) != 0:
             return f".{block["name"]}"
+        if f".{block["name"]}" in self.globals:
+            return f".{block["name"]}"
         self.writeln(f".{block["name"]}")
         self.writeln(f"DW {self.compile(block["initializer"])}")
         self.writeln("NOP")
+        self.globals.append(f".{block["name"]}")
         return f".{block["name"]}"
+    
+    def compile_struct_type_block(self, block):
+        if len(self.stack_frame) != 0:
+            return block["name"]
+        if block["name"] in self.globals:
+            return block["name"]
+
+        self.globals.append(block["name"])
+        return block["name"]
 
     def get_free_register(self):
         for register, data in self.registers.items():
@@ -193,38 +209,60 @@ class __COMPILER__:
         self.stack_frame.pop()
         return f".{block["name"]}"
     
-    def compile_array(self, frame, value, offset_index = 0):
+    def compile_array(self, frame, value, offset_index = 0, stack_offset = 0):
         offset = value.type.of.offset
         for index in range(value.type.size):
             if type(value) == __CONSTANT__ and value.value[index].type.kind == "ArrayType": # type: ignore
-                self.compile_array(frame, value.value[index], offset_index + (index * offset)) # type: ignore
+                self.compile_array(frame, value.value[index], offset_index + (index * offset), stack_offset=stack_offset) # type: ignore
                 continue
             alignment = offset_index + (index * offset)
             c_value = self.compile(value.value[index]) # type: ignore
             self.writeln(
-                f"LSTR {self.get_register_name("stack_address")} -{frame["stack_address"] - alignment} {c_value}"
+                f"LSTR {self.get_register_name("stack_address")} -{stack_offset - alignment} {c_value}"
             )
+
+    def compile_struct(self, value, stack_offset = 0, offset_index = 0, original_type = None):
+        frame = self.get_stack_frame()
+        if not frame:
+            return
+        offset = value.type.offset
+        for index in range(len(original_type.members)): # type: ignore
+            if original_type.members[index].type.kind == "StructType": # type: ignore
+                self.compile_struct(frame, value.value[index], stack_offset=stack_offset, offset_index=offset_index + (index * offset), original_type = original_type.members[index]) # type: ignore
+                continue
+            alignment = offset_index + (index * offset)
+            c_value = self.compile(value.value[index]) # type: ignore
+            self.writeln(
+                f"LSTR {self.get_register_name("stack_address")} -{stack_offset - alignment} {c_value}"
+            )        
+
 
     def compile_store_block(self, block):
         frame = self.get_stack_frame()
-        if frame == None:
+        if not frame:
             print("Cannot allocate stack variables outside of a scope!")
             return
 
-        value = self.compile(block["value"])
+        value = None;
         offset = None;
-
+        stack_offset = 0;
         if not block["memory"].name in frame["variables"]:
             offset = block["memory"].value.type.offset
             frame["stack_address"] += offset
-            
-        if block["memory"].value.type["kind"] == "ArrayType":
-            self.compile_array(frame, block["value"])
+            stack_offset = frame["stack_address"]
         else:
+            stack_offset = frame["variables"][block["memory"].name]["stack_offset"]
+
+        if block["memory"].value.type["kind"] == "ArrayType":
+            self.compile_array(frame, block["value"], stack_offset = stack_offset)
+        elif block["memory"].value.type["kind"] == "StructType":
+            self.compile_struct(block["value"], stack_offset = stack_offset, original_type = self.get_type(block["value"]))
+        else:
+            value = self.compile(block["value"])
             self.writeln(
-                f"LSTR {self.get_register_name("stack_address")} -{frame["stack_address"]} {value}"
+                f"LSTR {self.get_register_name("stack_address")} -{stack_offset} {value}"
             )
-            
+
         if not block["memory"].name in frame["variables"]:
             frame["variables"][block["memory"].name] = {
                 "stack_offset": frame["stack_address"],
@@ -448,3 +486,5 @@ class __COMPILER__:
                 return block.type
             case "GetElementPointerBlock":
                 return block["pointer"].type
+            case "StructTypeBlock":
+                return block["type"]
