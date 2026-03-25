@@ -1,7 +1,3 @@
-# types = {
-#     "IntType": def(bits: int):
-#         pass
-# }
 from typing import Union
 from .ir_types import __STRUCT_TYPE__, CMP_OPERATORS, __ADDRESS__, __TEMPORARY_VALUE__, __types_CLASS__, __CONSTANT__, __VALUE__, REPR_MODULE_INDENTATION, __FUNCTION_TYPE__, TYPEDEF_FUNCTION_ARGUMENT
 from .urcl_ir_compiler import __COMPILER__, __format_urcl__
@@ -199,8 +195,6 @@ class __MODULE_IR__:
                 return self.compare_ir(block)
             case "BranchBlock":
                 return self.branch_ir(block)
-            case "StructTypeBlock":
-                return self.struct_type_ir(block)
             
     def write(self, text: str, respect_indentation: bool = False):
         self.module += f"{" "*REPR_MODULE_INDENTATION if respect_indentation else ""}{text}"
@@ -228,7 +222,7 @@ class __MODULE_IR__:
         if block["name"] in self.globals:
             return f"@{block["name"]}", block["type"]
         self.writeln(
-            f"global @{block["name"]} = {block["type"].as_string()}, {block["initializer"].as_string()}"
+            f"global @{block["name"]} = {block["type"].as_string()}, {block["initializer"].as_string(module_ir=self)}"
         )
         self.globals.append(block["name"])
         return f"@{block["name"]}", block["type"]
@@ -255,17 +249,24 @@ class __MODULE_IR__:
 
     def store_ir(self, block):
         frame = self.get_stack_frame()
+
         memory = block["memory"]
-        if memory.name in frame["data"]:
-            if not frame["data"][memory.name]["initialized"]:
+        if memory["name"] in frame["data"]:
+            if not frame["data"][memory["name"]]["initialized"]:
                 self.writeln(
                     f"%{memory.name} = alloc {memory.value.type.as_string()}"
                 )
-            frame["data"][memory.name]["initialized"] = True
+            frame["data"][memory["name"]]["initialized"] = True
             value, type = self.ir(block["value"])  # type: ignore
             name, alloc_type = self.ir(memory)  # type: ignore
             self.writeln(
                 f"store {type.as_string()} {value}, {alloc_type.as_string()} {name}"  # type: ignore
+            )
+        else:
+            value, type = self.ir(block["value"])  # type: ignore
+            name, alloc_type = self.ir(memory)  # type: ignore
+            self.writeln(
+                f"store {type.as_string()} {value}, {alloc_type.as_pointer().as_string()} {name}"  # type: ignore
             )
 
     def function_ir(self, block):
@@ -389,18 +390,6 @@ class __MODULE_IR__:
             self.ir(nested_block)
         self.dec_indentation()
 
-    def struct_type_ir(self, block):
-        if len(self.stack_frames) != 0:
-            return f"@{block["name"]}", block["type"]
-        if block["name"] in self.globals:
-            return f"@{block["name"]}", block["type"]
-        
-        self.writeln(f"global @{block["name"]} = {block["type"].as_string()}")
-        
-        self.globals.append(block["name"])
-        return f"@{block["name"]}", block["type"]
-
-
 class TYPEDEF_FUNCTION_BLOCK(TypedDict):
     name: str
     block: __BLOCK_CLASS__
@@ -415,8 +404,8 @@ class __MODULE_CLASS__:
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def compile(self):
-        return __format_urcl__(__COMPILER__(self.blocks).urcl)
+    def compile(self, flags: list[str] = []):
+        return __format_urcl__(__COMPILER__(self.blocks, flags).urcl)
 
     def __str__(self):
         return __MODULE_IR__(self.blocks, self.data).module

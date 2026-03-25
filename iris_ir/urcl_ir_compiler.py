@@ -1,4 +1,6 @@
-from .ir_types import __CONSTANT__, TYPEDEF_FUNCTION_ARGUMENT
+from .ir_types import __INT_TYPE__, FLOAT_SCALE_FACTOR, __CONSTANT__, TYPEDEF_FUNCTION_ARGUMENT
+import os
+
 
 def __format_urcl__(urcl: str = ""):
     lines = urcl.strip().splitlines()
@@ -6,22 +8,25 @@ def __format_urcl__(urcl: str = ""):
     in_label = False
     for index, line in enumerate(lines):
         if line.startswith("."):
-            result += f"{"\n" if index != 0 else ""}{line}\n"
+            result += f"{"\n" if index != 0 else ""}{line.strip()}\n"
             in_label = True
         else:
-            result += f"{"\t" if in_label else ""}{line}\n"
+            result += f"{"\t" if in_label else ""}{line.strip()}\n"
         if "ret" in line.lower():
             in_label = False
     return result
 
+
 class __COMPILER__:
-    def __init__(self, blocks):
+    def __init__(self, blocks, flags: list[str]):
         self.blocks = blocks
         self.stack_frame = []
         self.globals = []
         self.ssa_registers = {}
         self.urcl = ""
         self.word_size = 0
+        self.flags = flags
+        self.urcl_software_templates = {}
         entry = False
         headers = 0
         for block in blocks:
@@ -34,17 +39,52 @@ class __COMPILER__:
             "return_value": {"name": "R2", "free": True, "general_purpose": False},
         }
 
-        for index in range(3, 16):
-            self.registers[f"R{index}"] = {"name": f"R{index}", "free": True, "general_purpose": True} # type: ignore
+        for index in range(3, 14):
+            self.registers[f"R{index}"] = {"name": f"R{index}", "free": True, "general_purpose": True}  # type: ignore
 
         for block in blocks:
             if headers <= 0 and entry == False:
                 entry = True
+                self.writeln(f"@DEFINE FLOAT_SCALE_FACTOR_BITS {FLOAT_SCALE_FACTOR}")
+                self.writeln(f"@DEFINE FLOAT_SCALE_FACTOR {round(2^FLOAT_SCALE_FACTOR)}")
                 self.writeln("CAL .main")
                 self.writeln("HLT")
+                if "--nosoftware" not in flags:
+                    self.add_urcl_software()
+                    self.writeln(self.urcl_software_templates["sfpurcl_out"])
             if block["kind"] == "HeaderBlock" and entry == False:
                 headers -= 1
             self.compile(block)
+
+    def add_urcl_software(self):
+        urcl_software_directory = "urcl_software"
+        for flag in self.flags:
+            if "--softwarepath=" in flag:
+                split = flag.split("=")
+                urcl_software_directory = (
+                    split[1] if len(split) >= 2 else "urcl_software"
+                )
+                break
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        urcl_software_directory = os.path.join(base_dir, urcl_software_directory)
+        for root, _, files in os.walk(urcl_software_directory):
+            for file in files:
+                full_file_path = os.path.join(root, file)
+
+                with open(full_file_path, "r") as software_file:
+                    templates = software_file.read().strip().split("NOP")
+                    for template in templates:
+                        lines = template.strip().splitlines()
+                        name = lines.pop(0)[1:]
+                        template_value = "\n".join(lines)
+                        self.urcl_software_templates[name] = template_value
+
+    def compute_template(self, name, replacers):
+        template = self.urcl_software_templates[name]
+        for replacer, value in replacers.items():
+            template = template.replace("$" + replacer, str(value))
+        return template
 
     def get_register_name(self, name: str):
         return self.registers[name]["name"]
@@ -117,8 +157,6 @@ class __COMPILER__:
                 return self.compile_compare_block(block)
             case "BranchBlock":
                 return self.compile_branch_block(block)
-            case "StructTypeBlock":
-                return self.compile_struct_type_block(block)
 
     def compile_header(self, block):
         kind = block["header_kind"]
@@ -131,8 +169,10 @@ class __COMPILER__:
             self.writeln(f"{kind.upper()} {block["value"]}")
 
     def compile_constant(self, block):
-        if len(self.stack_frame) != 0 and block.type["kind"] == "StructType":
-            self.compile_struct(block)
+        if block.type["kind"] in ("HalfType", "FloatType", "DoubleType"):
+            return round(block.value * (2 ** FLOAT_SCALE_FACTOR))
+        if block.type["kind"] == "StructType":
+            return self.compile_struct(block, original_type=block["type"])
         return block.as_string(True)
 
     def compile_global_memory_block(self, block):
@@ -145,15 +185,6 @@ class __COMPILER__:
         self.writeln("NOP")
         self.globals.append(f".{block["name"]}")
         return f".{block["name"]}"
-    
-    def compile_struct_type_block(self, block):
-        if len(self.stack_frame) != 0:
-            return block["name"]
-        if block["name"] in self.globals:
-            return block["name"]
-
-        self.globals.append(block["name"])
-        return block["name"]
 
     def get_free_register(self):
         for register, data in self.registers.items():
@@ -182,11 +213,17 @@ class __COMPILER__:
         old_urcl = self.urcl
         self.urcl = ""
 
-        frame = {"kind": "FunctionFrame", "variables": {}, "params": {}, "stack_address": 0, "ssa_registers": {}}
+        frame = {
+            "kind": "FunctionFrame",
+            "variables": {},
+            "params": {},
+            "stack_address": 0,
+            "ssa_registers": {},
+        }
         self.stack_frame.append(frame)
         args: list[TYPEDEF_FUNCTION_ARGUMENT] = block["args"]
         for index, arg in enumerate(args):
-            offset = arg["arg"].offset # type: ignore
+            offset = arg["arg"].offset  # type: ignore
             frame["stack_address"] += offset
             if index < 6:
                 self.writeln(f"LSTR R1 -{frame["stack_address"]} R{17 + index}")
@@ -208,34 +245,47 @@ class __COMPILER__:
         self.urcl = old_urcl + self.urcl
         self.stack_frame.pop()
         return f".{block["name"]}"
-    
-    def compile_array(self, frame, value, offset_index = 0, stack_offset = 0):
+
+    def compile_array(self, frame, value, offset_index=0, stack_offset=0):
         offset = value.type.of.offset
         for index in range(value.type.size):
-            if type(value) == __CONSTANT__ and value.value[index].type.kind == "ArrayType": # type: ignore
-                self.compile_array(frame, value.value[index], offset_index + (index * offset), stack_offset=stack_offset) # type: ignore
+            if type(value) == __CONSTANT__ and value.value[index].type.kind == "ArrayType":  # type: ignore
+                self.compile_array(frame, value.value[index], offset_index + (index * offset), stack_offset=stack_offset)  # type: ignore
                 continue
             alignment = offset_index + (index * offset)
-            c_value = self.compile(value.value[index]) # type: ignore
+            c_value = self.compile(value.value[index])  # type: ignore
             self.writeln(
                 f"LSTR {self.get_register_name("stack_address")} -{stack_offset - alignment} {c_value}"
             )
 
-    def compile_struct(self, value, stack_offset = 0, offset_index = 0, original_type = None):
+    def compile_struct(self, value, stack_offset=0, offset_index=0, original_type=None):
         frame = self.get_stack_frame()
         if not frame:
-            return
-        offset = value.type.offset
-        for index in range(len(original_type.members)): # type: ignore
-            if original_type.members[index].type.kind == "StructType": # type: ignore
-                self.compile_struct(frame, value.value[index], stack_offset=stack_offset, offset_index=offset_index + (index * offset), original_type = original_type.members[index]) # type: ignore
+            representation = "["
+            for index in range(len(original_type.members)):  # type: ignore
+                if original_type.members[index].kind == "StructType":  # type: ignore
+                    self.compile_struct(frame, value.value[index], stack_offset=stack_offset, offset_index=offset_index + (index * offset), original_type=original_type.members[index])  # type: ignore
+                    continue
+                c_value = self.compile(value.value[index])  # type: ignore
+                representation += f"{c_value}{", " if index + 1 != len(original_type.members) else ""}"  # type: ignore
+            representation += "]"
+            return representation
+
+        offset = value.type.alignment
+        for index in range(len(original_type.members)):  # type: ignore
+            if original_type.members[index].kind == "StructType":  # type: ignore
+                self.compile_struct(frame, value.value[index], stack_offset=stack_offset, offset_index=offset_index + (index * offset), original_type=original_type.members[index])  # type: ignore
                 continue
+
+            if original_type.members[index].kind == "ArrayType":  # type: ignore
+                self.compile_array(frame, value.value[index], stack_offset=stack_offset, offset_index=offset_index + (index * offset))  # type: ignore
+                continue
+
             alignment = offset_index + (index * offset)
-            c_value = self.compile(value.value[index]) # type: ignore
+            c_value = self.compile(value.value[index])  # type: ignore
             self.writeln(
                 f"LSTR {self.get_register_name("stack_address")} -{stack_offset - alignment} {c_value}"
-            )        
-
+            )
 
     def compile_store_block(self, block):
         frame = self.get_stack_frame()
@@ -243,20 +293,30 @@ class __COMPILER__:
             print("Cannot allocate stack variables outside of a scope!")
             return
 
-        value = None;
-        offset = None;
-        stack_offset = 0;
-        if not block["memory"].name in frame["variables"]:
-            offset = block["memory"].value.type.offset
+        if block["memory"]["kind"] != "AddressBlock":
+            pointer = self.compile(block["memory"])
+            value = self.compile(block["value"])
+            self.writeln(f"STR {pointer} {value}")
+            return
+
+        value = None
+        offset = None
+        stack_offset = 0
+        if not block["memory"]["name"] in frame["variables"]:
+            offset = block["memory"]["value"].type.offset
             frame["stack_address"] += offset
             stack_offset = frame["stack_address"]
         else:
-            stack_offset = frame["variables"][block["memory"].name]["stack_offset"]
+            stack_offset = frame["variables"][block["memory"]["name"]]["stack_offset"]
 
         if block["memory"].value.type["kind"] == "ArrayType":
-            self.compile_array(frame, block["value"], stack_offset = stack_offset)
+            self.compile_array(frame, block["value"], stack_offset=stack_offset)
         elif block["memory"].value.type["kind"] == "StructType":
-            self.compile_struct(block["value"], stack_offset = stack_offset, original_type = self.get_type(block["value"]))
+            self.compile_struct(
+                block["value"],
+                stack_offset=stack_offset,
+                original_type=self.get_type(block["value"]),
+            )
         else:
             value = self.compile(block["value"])
             self.writeln(
@@ -276,16 +336,92 @@ class __COMPILER__:
         left = self.compile(block["left"])
         right = self.compile(block["right"])
 
+        left_type = self.get_type(block["left"])
+        right_type = self.get_type(block["right"])
+
+        result_type = left_type
+        operation_kind = "int"
+        operation_type = result_type.kind
+        if left_type.kind != "IntType" or right_type.kind != "IntType":
+            if left_type.kind == "IntType":
+                operation_type = right_type.kind
+            elif right_type.kind == "IntType":
+                operation_type = left_type.kind
+            
+        if operation_type == "IntType":
+            operation_kind = f"sint_{"u" if not result_type["signed"] else "i"}"
+        elif operation_type == "HalfType":
+            operation_kind = "sfp16_"
+        elif operation_type == "FloatType":
+            operation_kind = "sfp32_"
+        elif operation_type == "DoubleType":
+            operation_kind = "sfp64_"
+        else:
+            print("Invalid type for operation!")
+            return
+        
+        if operation_type != "IntType":
+            if left_type.kind == "IntType":
+                new_left_register = self.get_free_register()
+                self.writeln(f"BSL {new_left_register} {left} {FLOAT_SCALE_FACTOR}")
+                self.occupy_register(new_left_register)
+                self.free_register(right)
+                left = new_left_register
+                left_type = right_type
+                result_type = right_type.kind
+            elif right_type.kind == "IntType":
+                new_right_register = self.get_free_register()
+                self.writeln(f"BSL {new_right_register} {right} {FLOAT_SCALE_FACTOR}")
+                self.occupy_register(new_right_register)
+                self.free_register(right)
+                right = new_right_register
+                right_type = left_type
+                result_type = left_type.kind
+            
+
         result_register = self.get_free_register()
         self.occupy_register(result_register)
 
         match block["kind"]:
             case "AddBlock":
-                self.writeln(f"ADD {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}add",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
             case "SubBlock":
-                self.writeln(f"SUB {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}sub",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
             case "MulBlock":
-                self.writeln(f"MLT {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}mul",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
 
         self.free_register(left)
         self.free_register(right)
@@ -297,7 +433,7 @@ class __COMPILER__:
         if not frame:
             print("Cannot retrieve value outside of a scope!")
             return
-        
+
         if name not in frame["variables"]:
             print(f"'{name}' is not a variable!")
             return
@@ -305,26 +441,30 @@ class __COMPILER__:
         data = frame["variables"][name]
         register = self.get_free_register()
         self.occupy_register(register)
-        self.writeln(f"LLOD {register} {self.get_register_name("stack_address")} -{data["stack_offset"]}")
+        self.writeln(
+            f"LLOD {register} {self.get_register_name("stack_address")} -{data["stack_offset"]}"
+        )
         return register
-    
+
     def compile_argument_block(self, block):
         name = block["name"]
         frame = self.get_stack_frame()
         if not frame:
             print("Cannot access arguments outside of a scope!")
             return
-        
+
         if name not in frame["params"]:
             print(f"'{name}' is not a parameter!")
             return
-        
+
         data = frame["params"][name]
         register = self.get_free_register()
         self.occupy_register(register)
-        self.writeln(f"LLOD {register} {self.get_register_name("stack_address")} -{data["stack_offset"]}")
+        self.writeln(
+            f"LLOD {register} {self.get_register_name("stack_address")} -{data["stack_offset"]}"
+        )
         return register
-    
+
     def compile_call_block(self, block):
         # {"kind": "CallBlock", "func": func, "args": arguments, "result": result_value}
         func = self.compile(block["func"])
@@ -336,18 +476,20 @@ class __COMPILER__:
             if index < 6:
                 self.writeln(f"MOV R{17 + index} {value}")
             else:
-                stack_usage += self.get_type(arg).offset # type: ignore
+                stack_usage += self.get_type(arg).offset  # type: ignore
                 stack_args.append(f"PSH {value}")
             self.free_register(value)
-        
+
         stack_args.reverse()
         for value in stack_args:
             self.writeln(value)
-        
+
         self.writeln(f"CAL {func}")
         self.occupy_register("return_value")
         if stack_usage > 0:
-            self.writeln(f"ADD {self.get_register_name("stack_pointer")} {self.get_register_name("stack_pointer")} {stack_usage}")
+            self.writeln(
+                f"ADD {self.get_register_name("stack_pointer")} {self.get_register_name("stack_pointer")} {stack_usage}"
+            )
         frame = self.get_stack_frame()
         return_register_name = self.get_register_name("return_value")
         if frame:
@@ -365,7 +507,7 @@ class __COMPILER__:
                 return frame["ssa_registers"][block.name]
             else:
                 return self.ssa_registers[block.name]
-            
+
     def compile_address_block(self, block):
         name = block.name
         frame = self.get_stack_frame()
@@ -385,13 +527,13 @@ class __COMPILER__:
 
     def compile_gep_block(self, block):
         """
-            {
-                "kind": "GetElementPointerBlock",
-                "element_type": element_type,
-                "pointer": pointer,
-                "index": index,
-                "name": name or self.temporary(),
-            }
+        {
+            "kind": "GetElementPointerBlock",
+            "element_type": element_type,
+            "pointer": pointer,
+            "index": index,
+            "name": name or self.temporary(),
+        }
         """
 
         pointer = block["pointer"]
@@ -406,7 +548,10 @@ class __COMPILER__:
         self.writeln(f"MOV {index_register} {index_value}")
         offset_register = self.get_free_register()
         self.occupy_register(offset_register)
-        self.writeln(f"MLT {offset_register} {index_register} {block["element_type"].offset}")
+        element_type = self.get_type(block["pointer"])
+        self.writeln(
+            f"MLT {offset_register} {index_register} {element_type.offset - 1}"  # type: ignore
+        )
         register = self.get_free_register()
         self.writeln(f"ADD {register} {base_pointer} {offset_register}")
         self.free_register(base_pointer)
@@ -415,7 +560,7 @@ class __COMPILER__:
         self.occupy_register(register)
 
         return register
-    
+
     def compile_load_block(self, block):
         pointer = self.compile(block["pointer"])
         register = self.get_free_register()
@@ -423,7 +568,7 @@ class __COMPILER__:
         self.occupy_register(register)
         self.free_register(pointer)
         return register
-    
+
     def compile_compare_block(self, block):
         operator = block["operator"]
         left = self.compile(block["left"])
@@ -433,19 +578,19 @@ class __COMPILER__:
             case "==":
                 self.writeln(f"SETE {result_register} {left} {right}")
             case "!=":
-                self.writeln(f"SETNE {result_register} {left} {right}")                
+                self.writeln(f"SETNE {result_register} {left} {right}")
             case ">=":
                 self.writeln(f"SETGE {result_register} {left} {right}")
             case "<=":
-                self.writeln(f"SETLE {result_register} {left} {right}")                
+                self.writeln(f"SETLE {result_register} {left} {right}")
             case ">":
                 self.writeln(f"SETG {result_register} {left} {right}")
             case "<":
-                self.writeln(f"SETL {result_register} {left} {right}")                
+                self.writeln(f"SETL {result_register} {left} {right}")
 
         self.occupy_register(result_register)
         return result_register
-    
+
     def compile_label_define_block(self, block):
         self.writeln(f".{block["label"]}")
         if not block["block"]:
@@ -488,3 +633,9 @@ class __COMPILER__:
                 return block["pointer"].type
             case "StructTypeBlock":
                 return block["type"]
+            case "AddressBlock":
+                return self.get_type(block.value)
+            case "ValueBlock":
+                return block.type
+            case _:
+                return __INT_TYPE__(0, False)

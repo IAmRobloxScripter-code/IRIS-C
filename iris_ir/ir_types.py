@@ -1,9 +1,8 @@
 from typing import TypedDict
 
-
 MAX_BITS = 16
 REPR_MODULE_INDENTATION = 2
-
+FLOAT_SCALE_FACTOR = 10
 
 class __POINTER_TYPE__:
     def __init__(self, type: object):
@@ -23,11 +22,12 @@ class __POINTER_TYPE__:
 
 
 class __INT_TYPE__:
-    def __init__(self, size: int):
+    def __init__(self, size: int, signed: bool = True):
         self.kind = "IntType"
         self.size = size
         self.size_in_bits = size
         self.offset = 1
+        self.signed = signed
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -36,13 +36,14 @@ class __INT_TYPE__:
         return __POINTER_TYPE__(self)
 
     def as_string(self):
-        return f"i{self.size}"
+        return f"{"i" if self.signed else "u"}{self.size}"
 
 
 class __HALF_TYPE__:
     def __init__(self):
         self.kind = "HalfType"
         self.size_in_bits = 16
+        self.size = 16
         self.offset = 1
 
     def __getitem__(self, key):
@@ -59,6 +60,7 @@ class __FLOAT_TYPE__:
     def __init__(self):
         self.kind = "FloatType"
         self.size_in_bits = 32
+        self.size = 32
         self.offset = 1
 
     def __getitem__(self, key):
@@ -75,6 +77,7 @@ class __DOUBLE_TYPE__:
     def __init__(self):
         self.kind = "DoubleType"
         self.size_in_bits = 64
+        self.size = 64
         self.offset = 1
 
     def __getitem__(self, key):
@@ -93,7 +96,7 @@ class __ARRAY_TYPE__:
         self.of = of
         self.size = size
         self.size_in_bits = of.size_in_bits * size
-        self.offset = (of.size_in_bits * size) // 8
+        self.offset = (of.size_in_bits * size)
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -151,10 +154,16 @@ class __STRUCT_TYPE__:
         self.members = members
         self.size = 1
         self.size_in_bits = 0 
+        self.alignment = 1
         self.offset = 0
         for member in members:
-            if member.offset > self.offset: # type: ignore
-                self.offset = member.offset # type: ignore
+            if member.kind == "ArrayType" and member.size > self.alignment: # type: ignore
+                self.alignment = member.size # type: ignore
+
+            if member.kind == "ArrayType": # type: ignore
+                self.offset += member.size # type: ignore
+            else:
+                self.offset += 1 
             self.size_in_bits += member.size_in_bits  # type: ignore
 
     def __getitem__(self, key):
@@ -171,8 +180,8 @@ class __STRUCT_TYPE__:
         return representation
 
 class __types_CLASS__:
-    def IntType(self, size: int):
-        return __INT_TYPE__(size)
+    def IntType(self, size: int, unsigned: bool = False):
+        return __INT_TYPE__(size, not unsigned)
 
     def HalfType(self):
         return __HALF_TYPE__()
@@ -224,6 +233,12 @@ class __CONSTANT__:
     def __init__(self, type, value):
         self.kind = "ConstantBlock"
         self.type = type
+        if type.kind == "IntType":
+            mask = (1 << type.size) - 1
+            value = value & mask
+            if type.signed:
+                sign_bit = 1 << (type.size - 1)
+                value = (value ^ sign_bit) - sign_bit
         self.value = value
 
     def __getitem__(self, key):

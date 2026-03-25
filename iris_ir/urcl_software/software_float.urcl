@@ -1,0 +1,33 @@
+.sfp16_add
+    ADD $RES_REG $A_REG $B_REG
+NOP
+.sfp16_sub
+    SUB $RES_REG $A_REG $B_REG
+NOP
+.sfp16_mul
+    MUL $RES_REG $A_REG $B_REG
+NOP
+.sfpurcl_out
+    .sfpurcl_out
+    POP R20
+    DIV R21 R20 1024
+    OUT %INT R21
+    OUT %TEXT '.'
+    MOD R23 R20 1024
+    MLT R22 R23 10
+    DIV R22 R22 1024
+    OUT %INT R22
+    
+    MOV R25 2
+    .sfpurcl_out_loop
+        BRE .sfpurcl_out_loop_end R25 0
+        MLT R23 R23 10
+        MOD R22 R23 1024
+        MLT R22 R22 10
+        DIV R22 R22 1024
+        OUT %INT R22
+        DEC R25 R25
+        JMP .sfpurcl_out_loop
+    .sfpurcl_out_loop_end
+
+    RET
