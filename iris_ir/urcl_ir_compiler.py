@@ -1,4 +1,4 @@
-from .ir_types import __INT_TYPE__, FLOAT_SCALE_FACTOR, __CONSTANT__, TYPEDEF_FUNCTION_ARGUMENT
+from .ir_types import CMP_OPERATORS_FUNCS, __DOUBLE_TYPE__, __FLOAT_TYPE__, __HALF_TYPE__, __INT_TYPE__, FLOAT_SCALE_FACTOR, __CONSTANT__, TYPEDEF_FUNCTION_ARGUMENT
 import os
 
 
@@ -16,6 +16,7 @@ def __format_urcl__(urcl: str = ""):
             in_label = False
     return result
 
+optimization_flags = ["-O1", "-O2", "-O3"]
 
 class __COMPILER__:
     def __init__(self, blocks, flags: list[str]):
@@ -27,6 +28,18 @@ class __COMPILER__:
         self.word_size = 0
         self.flags = flags
         self.urcl_software_templates = {}
+        if "-O0" in flags:
+            self.optimize = False
+        else:
+            self.optimize = any(flag in flags for flag in optimization_flags)
+            self.optimization_level = 0
+            if "-O1" in flags:
+                self.optimization_level = 1
+            elif "-O2" in flags:
+                self.optimization_level = 2
+            elif "-O3" in flags:
+                self.optimization_level = 3
+
         entry = False
         headers = 0
         for block in blocks:
@@ -46,7 +59,7 @@ class __COMPILER__:
             if headers <= 0 and entry == False:
                 entry = True
                 self.writeln(f"@DEFINE FLOAT_SCALE_FACTOR_BITS {FLOAT_SCALE_FACTOR}")
-                self.writeln(f"@DEFINE FLOAT_SCALE_FACTOR {round(2^FLOAT_SCALE_FACTOR)}")
+                self.writeln(f"@DEFINE FLOAT_SCALE_FACTOR {round(2**FLOAT_SCALE_FACTOR)}")
                 self.writeln("CAL .main")
                 self.writeln("HLT")
                 if "--nosoftware" not in flags:
@@ -131,7 +144,19 @@ class __COMPILER__:
                 return self.compile_return_block(block)
             case "StoreBlock":
                 return self.compile_store_block(block)
-            case "AddBlock" | "SubBlock" | "MulBlock" | "DivBlock":
+            case (
+                "AddBlock"
+                | "SubBlock"
+                | "MulBlock"
+                | "DivBlock"
+                | "RSBlock"
+                | "LSBlock"
+                | "ANDBlock"
+                | "NANDBlock"
+                | "ORBlock"
+                | "NORBlock"
+                | "XORBlock"
+                ):
                 return self.compile_operation_block(block)
             case "ValueBlock":
                 return self.compile_value_block(block)
@@ -196,12 +221,17 @@ class __COMPILER__:
         self.writeln(
             f"MOV {self.get_register_name("return_value")} {self.compile(block["value"])}"
         )
-        self.writeln(
-            f"MOV {self.get_register_name("stack_pointer")} {self.get_register_name("stack_address")}"
-        )
-        self.writeln(f"POP {self.get_register_name("stack_address")}")
-        self.free_register("stack_address")
-        self.writeln("RET")
+        frame = self.get_stack_frame()
+        # if frame and frame["inlined"]:
+        #     frame["parent"]["ssa_registers"][block["value"]["result"]] = self.get_register_name("return_value")
+
+        if frame and not frame["inlined"]:
+            self.writeln(
+                f"MOV {self.get_register_name("stack_pointer")} {self.get_register_name("stack_address")}"
+            )
+            self.writeln(f"POP {self.get_register_name("stack_address")}")
+            self.free_register("stack_address")
+            self.writeln("RET")
 
     def compile_function_block(self, block):
         if len(self.stack_frame) != 0:
@@ -219,6 +249,7 @@ class __COMPILER__:
             "params": {},
             "stack_address": 0,
             "ssa_registers": {},
+            "inlined": False
         }
         self.stack_frame.append(frame)
         args: list[TYPEDEF_FUNCTION_ARGUMENT] = block["args"]
@@ -302,7 +333,7 @@ class __COMPILER__:
         value = None
         offset = None
         stack_offset = 0
-        if not block["memory"]["name"] in frame["variables"]:
+        if block["memory"]["name"] not in frame["variables"]:
             offset = block["memory"]["value"].type.offset
             frame["stack_address"] += offset
             stack_offset = frame["stack_address"]
@@ -322,14 +353,31 @@ class __COMPILER__:
             self.writeln(
                 f"LSTR {self.get_register_name("stack_address")} -{stack_offset} {value}"
             )
+            if block["memory"].name in frame["variables"]:
+                frame["variables"][block["memory"]["name"]]["value"] = block["value"]
 
-        if not block["memory"].name in frame["variables"]:
+        if block["memory"].name not in frame["variables"]:
             frame["variables"][block["memory"].name] = {
                 "stack_offset": frame["stack_address"],
                 "offset": offset,
+                "value": block["value"],
+                "used": False,
+                "volatile": False,
+                "restrict": False,
             }
 
         self.free_register(value)
+
+    def get_number_type(self, n):
+        try:
+            int(n)
+            return "int"
+        except ValueError:
+            try:
+                float(n)
+                return "float"
+            except ValueError:
+                return None
 
     def compile_operation_block(self, block):
         # {"kind": "AddBlock", "left": left, "right": right, "result": identifier}
@@ -347,6 +395,60 @@ class __COMPILER__:
                 operation_type = right_type.kind
             elif right_type.kind == "IntType":
                 operation_type = left_type.kind
+
+        if self.get_number_type(left) and self.get_number_type(right):
+            if self.get_number_type(left) == "float": # type: ignore
+                left = float(left) # type: ignore
+            else:
+                left = int(left) # type: ignore
+            if self.get_number_type(right) == "float": # type: ignore
+                right = float(right) # type: ignore
+            else:
+                right = int(right) # type: ignore
+
+            match block["kind"]:
+                case "AddBlock":
+                    if operation_type == "IntType":
+                        result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), left + right))  # type: ignore
+                    elif operation_type == "HalfType":
+                        result = self.compile(__CONSTANT__(__HALF_TYPE__(), left + right))  # type: ignore
+                    elif operation_type == "FloatType":
+                        result = self.compile(__CONSTANT__(__FLOAT_TYPE__(), left + right))  # type: ignore
+                    elif operation_type == "DoubleType":
+                        result = self.compile(__CONSTANT__(__DOUBLE_TYPE__(), left + right))  # type: ignore
+                case "SubBlock":
+                    if operation_type == "IntType":
+                        result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), left - right))  # type: ignore
+                    elif operation_type == "HalfType":
+                        result = self.compile(__CONSTANT__(__HALF_TYPE__(), left - right))  # type: ignore
+                    elif operation_type == "FloatType":
+                        result = self.compile(__CONSTANT__(__FLOAT_TYPE__(), left - right))  # type: ignore
+                    elif operation_type == "DoubleType":
+                        result = self.compile(__CONSTANT__(__DOUBLE_TYPE__(), left - right))  # type: ignore
+                case "MulBlock":
+                    if operation_type == "IntType":
+                        result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), left * right))  # type: ignore
+                    elif operation_type == "HalfType":
+                        result = self.compile(__CONSTANT__(__HALF_TYPE__(), left * right))  # type: ignore
+                    elif operation_type == "FloatType":
+                        result = self.compile(__CONSTANT__(__FLOAT_TYPE__(), left * right))  # type: ignore
+                    elif operation_type == "DoubleType":
+                        result = self.compile(__CONSTANT__(__DOUBLE_TYPE__(), left * right))  # type: ignore
+                case "DivBlock":
+                    if operation_type == "IntType":
+                        result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), left // right))  # type: ignore
+                    elif operation_type == "HalfType":
+                        result = self.compile(__CONSTANT__(__HALF_TYPE__(), left / right))  # type: ignore
+                    elif operation_type == "FloatType":
+                        result = self.compile(__CONSTANT__(__FLOAT_TYPE__(), left / right))  # type: ignore
+                    elif operation_type == "DoubleType":
+                        result = self.compile(__CONSTANT__(__DOUBLE_TYPE__(), left / right))  # type: ignore
+            self.free_register(left)
+            self.free_register(right)
+            return result
+        
+        result_register = self.get_free_register()
+        self.occupy_register(result_register)
             
         if operation_type == "IntType":
             operation_kind = f"sint_{"u" if not result_type["signed"] else "i"}"
@@ -358,6 +460,9 @@ class __COMPILER__:
             operation_kind = "sfp64_"
         else:
             print("Invalid type for operation!")
+            self.free_register(left)
+            self.free_register(right)
+            self.free_register(result_register)
             return
         
         if operation_type != "IntType":
@@ -365,10 +470,10 @@ class __COMPILER__:
                 new_left_register = self.get_free_register()
                 self.writeln(f"BSL {new_left_register} {left} {FLOAT_SCALE_FACTOR}")
                 self.occupy_register(new_left_register)
-                self.free_register(right)
+                self.free_register(left)
                 left = new_left_register
                 left_type = right_type
-                result_type = right_type.kind
+                result_type = right_type
             elif right_type.kind == "IntType":
                 new_right_register = self.get_free_register()
                 self.writeln(f"BSL {new_right_register} {right} {FLOAT_SCALE_FACTOR}")
@@ -376,11 +481,7 @@ class __COMPILER__:
                 self.free_register(right)
                 right = new_right_register
                 right_type = left_type
-                result_type = left_type.kind
-            
-
-        result_register = self.get_free_register()
-        self.occupy_register(result_register)
+                result_type = left_type
 
         match block["kind"]:
             case "AddBlock":
@@ -422,6 +523,110 @@ class __COMPILER__:
                         },
                     )
                 )
+            case "DivBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}div",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "RSBlock":
+               self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}rs",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "LSBlock":
+               self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}ls",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "ANDBlock":
+               self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}and",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "NANDBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}nand",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "ORBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}or",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "NORBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}nor",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
+            case "XORBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"{operation_kind}xor",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
+                        },
+                    )
+                )
 
         self.free_register(left)
         self.free_register(right)
@@ -439,6 +644,14 @@ class __COMPILER__:
             return
 
         data = frame["variables"][name]
+        if not data["used"]:
+            data["used"] = True
+            if data["value"]["kind"] == "AddressBlock" and data["value"]["name"] in frame["variables"]:
+                return self.compile_value_block(frame["variables"][data["value"]["name"]])
+
+            if data["value"]["kind"] == "ConstantBlock" and data["value"]["type"]["kind"] in ("IntType", "HalfType", "FloatType", "DoubleType"):
+                return self.compile_constant(data["value"])
+
         register = self.get_free_register()
         self.occupy_register(register)
         self.writeln(
@@ -456,7 +669,7 @@ class __COMPILER__:
         if name not in frame["params"]:
             print(f"'{name}' is not a parameter!")
             return
-
+        
         data = frame["params"][name]
         register = self.get_free_register()
         self.occupy_register(register)
@@ -464,9 +677,63 @@ class __COMPILER__:
             f"LLOD {register} {self.get_register_name("stack_address")} -{data["stack_offset"]}"
         )
         return register
+    
+    def inline_heuristics_control_flows(self, block):
+        control_flows = 0
+
+        for block_node in block.blocks:
+            if block_node["kind"] in ("BranchBlock", "JumpBlock", "LabelDefineBlock"):
+                if block_node["kind"] == "BanchBlock":
+                    control_flows += self.inline_heuristics_control_flows(block_node["then"])
+                    control_flows += self.inline_heuristics_control_flows(block_node["else"])
+                elif block_node["kind"] == "LabelDefineBlock":
+                    control_flows += self.inline_heuristics_control_flows(block_node["block"])
+                else:
+                    control_flows += 1
+        return control_flows
 
     def compile_call_block(self, block):
         # {"kind": "CallBlock", "func": func, "args": arguments, "result": result_value}
+        if block["func"]["kind"] == "FunctionBlock" and block["func"]["inline"]:
+            instructions = len(block["func"]["block"].blocks)
+            control_flows = self.inline_heuristics_control_flows(block["func"]["block"])
+            current_frame = self.get_stack_frame()
+
+            if instructions > control_flows and current_frame:
+                frame = {
+                    "kind": "FunctionFrame",
+                    "variables": {},
+                    "params": {},
+                    "stack_address": current_frame["stack_address"],
+                    "ssa_registers": {},
+                    "inlined": True,
+                    "parent": current_frame
+                }
+
+                args: list[TYPEDEF_FUNCTION_ARGUMENT] = block["args"]
+                for index, arg in enumerate(args):
+                    fn_arg = block["func"]["args"][index]
+                    offset = fn_arg["arg"].offset  # type: ignore
+                    frame["stack_address"] += offset
+                    arg_value = self.compile(arg)
+                    self.writeln(f"LSTR R1 -{frame["stack_address"]} {arg_value}")
+                    self.free_register(arg_value)
+
+                    frame["params"][fn_arg["name"]] = {
+                        "stack_offset": frame["stack_address"],
+                        "offset": offset,
+                    }
+
+                self.stack_frame.append(frame)
+                
+                for block_node in block["func"]["block"].blocks:
+                    self.compile(block_node)
+
+                self.stack_frame.pop()
+                current_frame["ssa_registers"][block["result"]] = self.get_register_name("return_value")
+                self.occupy_register("return_value")
+                return self.get_register_name("return_value")
+
         func = self.compile(block["func"])
         # print(block["func"])
         stack_usage = 0
@@ -496,7 +763,7 @@ class __COMPILER__:
             frame["ssa_registers"][block["result"]] = return_register_name
         else:
             self.ssa_registers[block["result"]] = return_register_name
-        return self.get_register_name("return_value")
+        return return_register_name
 
     def compile_temp_block(self, block):
         frame = self.get_stack_frame()
@@ -515,6 +782,14 @@ class __COMPILER__:
             return None
 
         data = frame["variables"][name]
+
+        if not data["used"]:
+            data["used"] = True 
+            if data["value"]["kind"] == "AddressBlock" and data["value"]["name"] in frame["variables"]:
+                return self.compile_value_block(data["value"])
+        
+            if data["value"]["kind"] == "ConstantBlock" and data["value"]["type"]["kind"] in ("IntType", "HalfType", "FloatType", "DoubleType"):
+                return self.compile_constant(data["value"])
 
         register = self.get_free_register()
         self.occupy_register(register)
@@ -574,19 +849,127 @@ class __COMPILER__:
         left = self.compile(block["left"])
         right = self.compile(block["right"])
         result_register = self.get_free_register()
+
+        left_type = self.get_type(block["left"])
+        right_type = self.get_type(block["right"])
+
+        if self.get_number_type(left) and self.get_number_type(right):
+            if self.get_number_type(left) == "float":
+                left = float(left)
+            else:
+                left = int(right)
+
+            if self.get_number_type(right) == "float":
+                right = float(right)
+            else:
+                right = int(right)
+                    
+            if left_type.kind != "IntType" or right_type.kind != "IntType":
+                if left_type.kind == "IntType":
+                    left <<= FLOAT_SCALE_FACTOR # type: ignore
+                elif right_type.kind == "IntType":
+                    right <<= FLOAT_SCALE_FACTOR # type: ignore
+
+
+            result = CMP_OPERATORS_FUNCS[operator](left, right)
+            
+            if result == True:
+                return str(True)
+            else:
+                return str(False)
+
+        signedness = "i"
+
+        if left_type.kind != "IntType" or right_type.kind != "IntType":
+            if left_type.kind == "IntType":
+                new_left_register = self.get_free_register()
+                self.writeln(f"BSL {new_left_register} {left} {FLOAT_SCALE_FACTOR}")
+                self.occupy_register(new_left_register)
+                self.free_register(left)
+                left = new_left_register
+                left_type = right_type
+            elif right_type.kind == "IntType":
+                new_right_register = self.get_free_register()
+                self.writeln(f"BSL {new_right_register} {right} {FLOAT_SCALE_FACTOR}")
+                self.occupy_register(new_right_register)
+                self.free_register(right)
+                right = new_right_register
+                right_type = left_type
+
+        if left_type.kind == "IntType" and right_type.kind == "IntType":
+            if left_type.kind == "IntType":
+                signedness = "i" if left_type.signed else "u"
+
+            if right_type.kind == "IntType" and signedness == "u":
+                signedness = "i" if right_type.signed else "u"
+
         match operator:
             case "==":
-                self.writeln(f"SETE {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}eq",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
             case "!=":
-                self.writeln(f"SETNE {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}neq",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
             case ">=":
-                self.writeln(f"SETGE {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}gte",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
             case "<=":
-                self.writeln(f"SETLE {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}lte",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
             case ">":
-                self.writeln(f"SETG {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}gt",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
             case "<":
-                self.writeln(f"SETL {result_register} {left} {right}")
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signedness}lt",
+                        {
+                            "A_REG": left,
+                            "B_REG": right,
+                            "RES_REG": result_register,
+                        },
+                    )
+                )
 
         self.occupy_register(result_register)
         return result_register
@@ -602,6 +985,20 @@ class __COMPILER__:
         then_label = self.compile(block["then"])
         else_label = self.compile(block["else"])
         condition_result = self.compile(block["condition"])
+
+        if condition_result == "True":
+            self.writeln(f"JMP {then_label}")
+            self.free_register(condition_result)
+            self.free_register(then_label)
+            self.free_register(else_label)
+            return
+        elif condition_result == "False":
+            self.writeln(f"JMP {else_label}")
+            self.free_register(condition_result)
+            self.free_register(then_label)
+            self.free_register(else_label)
+            return
+
         self.writeln(f"BRE {then_label} {condition_result} {2 ** self.word_size - 1}")
         self.writeln(f"BRE {else_label} {condition_result} 0")
         self.free_register(condition_result)

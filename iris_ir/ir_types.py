@@ -1,3 +1,4 @@
+import operator
 from typing import TypedDict
 
 MAX_BITS = 16
@@ -362,4 +363,13 @@ CMP_OPERATORS = {
     "<": "lt",
     ">=": "gte",
     "<=": "lte",
+}
+
+CMP_OPERATORS_FUNCS = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
 }
