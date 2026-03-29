@@ -234,7 +234,11 @@ class __CONSTANT__:
     def __init__(self, type, value):
         self.kind = "ConstantBlock"
         self.type = type
+        if type.kind in ("HalfType", "FloatType", "DoubleType"):
+            value = float(value)
+
         if type.kind == "IntType":
+            value = int(value)
             mask = (1 << type.size) - 1
             value = value & mask
             if type.signed:
@@ -253,10 +257,10 @@ class __CONSTANT__:
 
     def as_array_str(self, module_ir):
         representation = "["
-        for index, element in enumerate(self.value):
+        for index, element in enumerate(self.value): # type: ignore
             value, value_type = module_ir.ir(element)
             representation += (
-                f"{value}{", " if index + 1 != len(self.value) else ""}"
+                f"{value}{", " if index + 1 != len(self.value) else ""}" # type: ignore
             )
         representation += "]"
         return representation
@@ -264,7 +268,7 @@ class __CONSTANT__:
     def as_string_str(self, display_string_as_array):
         if not display_string_as_array:
             representation = '"'
-            for char in self.value:
+            for char in str(self.value):
                 if char in (
                     "\n",
                     "\t",
@@ -288,7 +292,7 @@ class __CONSTANT__:
 
         representation = "["
         inquotes = False
-        for char in self.value:
+        for char in str(self.value):
             if char in (
                 "\n",
                 "\t",
@@ -322,9 +326,9 @@ class __CONSTANT__:
     
     def as_string_struct(self, module_ir):
         representation = "["
-        for index, member in enumerate(self.value):
+        for index, member in enumerate(self.value): # type: ignore
             value, value_type = module_ir.ir(member)
-            representation += f"{value}{", " if index + 1 != len(self.value) else ""}"
+            representation += f"{value}{", " if index + 1 != len(self.value) else ""}" # type: ignore
         representation += "]"
         return representation
 

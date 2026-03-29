@@ -1,6 +1,5 @@
 .sfp16_add
     ADD $RES_REG $A_REG $B_REG
-    
 NOP
 .sfp16_sub
     SUB $RES_REG $A_REG $B_REG

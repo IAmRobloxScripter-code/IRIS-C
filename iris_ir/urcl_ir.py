@@ -22,7 +22,7 @@ class __IR_CLASS__:
     def create_module(self) -> "__MODULE_CLASS__": ...
 
     def typeof(self, block):
-        if hasattr(block, "type") or "type" in block:
+        if hasattr(block, "type") or (type(block) == dict and "type" in block):
             return block["type"]
         else:
             return block["kind"]
@@ -69,8 +69,8 @@ class __BLOCK_CLASS__:
     def store(self, value, memory):
         self.blocks.append({"kind": "StoreBlock", "memory": memory, "value": value})
 
-    def ret(self, value):
-        self.blocks.append({"kind": "ReturnBlock", "value": value})
+    def ret(self, type, value):
+        self.blocks.append({"kind": "ReturnBlock", "type": type, "value": value})
 
     def add(self, left, right, name=None):
         identifier = name or self.temporary()
@@ -387,7 +387,7 @@ class __MODULE_IR__:
 
     def ret_ir(self, block):
         value, value_type = self.ir(block["value"])  # type: ignore
-        self.writeln(f"ret {value_type.as_string()} {self.get_symbol_from_name(value) if type(block["value"]) != __CONSTANT__ and value[0] not in ("@", "%") else ""}{value}")  # type: ignore
+        self.writeln(f"ret {block["type"].as_string()} {self.get_symbol_from_name(value) if type(block["value"]) != __CONSTANT__ and value[0] not in ("@", "%") else ""}{value}")  # type: ignore
 
     def get_symbol(self):
         return "@" if len(self.stack_frames) == 0 else "%"

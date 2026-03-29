@@ -29,10 +29,9 @@ class __COMPILER__:
         self.flags = flags
         self.urcl_software_templates = {}
         if "-O0" in flags:
-            self.optimize = False
-        else:
-            self.optimize = any(flag in flags for flag in optimization_flags)
             self.optimization_level = 0
+        else:
+            self.optimization_level = 1 # default O1
             if "-O1" in flags:
                 self.optimization_level = 1
             elif "-O2" in flags:
@@ -188,7 +187,7 @@ class __COMPILER__:
         if kind == "run":
             self.writeln(f"RUN {block["value"].upper()}")
         elif kind == "bits":
-            self.word_size = block["value"][1]
+            self.word_size = int(block["value"][1])
             self.writeln(f"BITS {(block["value"][0])} {block["value"][1]}")
         elif kind in ("minheap", "minreg", "minstack"):
             self.writeln(f"{kind.upper()} {block["value"]}")
@@ -396,15 +395,21 @@ class __COMPILER__:
             elif right_type.kind == "IntType":
                 operation_type = left_type.kind
 
-        if self.get_number_type(left) and self.get_number_type(right):
-            if self.get_number_type(left) == "float": # type: ignore
+        if self.optimization_level > 0 and self.get_number_type(left) and self.get_number_type(right):
+            if left_type.kind in ("HalfType", "FloatType", "DoubleType"): # type: ignore
                 left = float(left) # type: ignore
             else:
                 left = int(left) # type: ignore
-            if self.get_number_type(right) == "float": # type: ignore
+            if right_type.kind in ("HalfType", "FloatType", "DoubleType"): # type: ignore
                 right = float(right) # type: ignore
             else:
                 right = int(right) # type: ignore
+
+            if left_type.kind in ("HalfType", "FloatType", "DoubleType"):
+                left /= (2 ** FLOAT_SCALE_FACTOR)
+
+            if right_type.kind in ("HalfType", "FloatType", "DoubleType"):
+                right /= (2 ** FLOAT_SCALE_FACTOR)
 
             match block["kind"]:
                 case "AddBlock":
@@ -449,7 +454,7 @@ class __COMPILER__:
         
         result_register = self.get_free_register()
         self.occupy_register(result_register)
-            
+
         if operation_type == "IntType":
             operation_kind = f"sint_{"u" if not result_type["signed"] else "i"}"
         elif operation_type == "HalfType":
@@ -1015,8 +1020,17 @@ class __COMPILER__:
                 return block["type"]
             case "ReturnBlock":
                 return self.get_type(block["value"])
-            case "AddBlock" | "SubBlock" | "MulBlock" | "DivBlock":
-                return self.get_type(block["left"])
+            case "AddBlock" | "SubBlock" | "MulBlock" | "DivBlock" | "RSBlock" | "LSBlock" | "ANDBlock" | "NANDBlock" | "ORBlock" | "NORBlock" | "XORBlock":
+                left_type = self.get_type(block["left"])
+                right_type = self.get_type(block["right"])
+
+                if left_type.kind == "IntType" and right_type.kind == "IntType":
+                    return left_type
+                else:
+                    if left_type.kind == "IntType":
+                        return right_type
+                    else:
+                        return left_type
             case "ValueBlock":
                 return block.type
             case "ArgumentBlock":
@@ -1034,5 +1048,5 @@ class __COMPILER__:
                 return self.get_type(block.value)
             case "ValueBlock":
                 return block.type
-            case _:
-                return __INT_TYPE__(0, False)
+
+        return __INT_TYPE__(0, False)

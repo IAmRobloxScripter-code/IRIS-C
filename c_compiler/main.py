@@ -2,13 +2,13 @@ import io
 import pcpp
 import pycparser
 import sys
-
+from compiler import *
 
 argc = len(sys.argv)
 argv = sys.argv
 
 flags = []
-allowed_flags = ("-O0", "-O1", "-O2", "-O3", "--nosoftware")
+allowed_flags = ("-O0", "-O1", "-O2", "-O3", "--nosoftware", "--showir")
 if argc < 2:
     print("iris-c: no input files\ncompilation terminated.")
     sys.exit(1)
@@ -47,7 +47,10 @@ try:
         preprocessor.write(output)
         source = output.getvalue()
         ast = parser.parse(source)
-        ast.show()
+        # ast.show()
+        compiler_class = IRIS_IR_C(ast, flags)
+        compiler_class.compile(output_file_name)
+        
 
 except FileNotFoundError:
     print(
