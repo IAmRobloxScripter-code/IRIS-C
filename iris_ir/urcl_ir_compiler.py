@@ -16,8 +16,6 @@ def __format_urcl__(urcl: str = ""):
             in_label = False
     return result
 
-optimization_flags = ["-O1", "-O2", "-O3"]
-
 class __COMPILER__:
     def __init__(self, blocks, flags: list[str]):
         self.blocks = blocks
@@ -28,15 +26,15 @@ class __COMPILER__:
         self.word_size = 0
         self.flags = flags
         self.urcl_software_templates = {}
-        if "-O0" in flags:
+        if "-o0" in flags:
             self.optimization_level = 0
         else:
             self.optimization_level = 1 # default O1
-            if "-O1" in flags:
+            if "-o1" in flags:
                 self.optimization_level = 1
-            elif "-O2" in flags:
+            elif "-o2" in flags:
                 self.optimization_level = 2
-            elif "-O3" in flags:
+            elif "-o3" in flags:
                 self.optimization_level = 3
 
         entry = False
@@ -151,12 +149,12 @@ class __COMPILER__:
                 | "RSBlock"
                 | "LSBlock"
                 | "ANDBlock"
-                | "NANDBlock"
                 | "ORBlock"
-                | "NORBlock"
                 | "XORBlock"
                 ):
                 return self.compile_operation_block(block)
+            case "NOTBlock":
+                return self.compile_unary_block(block)
             case "ValueBlock":
                 return self.compile_value_block(block)
             case "ArgumentBlock":
@@ -377,6 +375,31 @@ class __COMPILER__:
                 return "float"
             except ValueError:
                 return None
+            
+    def compile_unary_block(self, block):
+        value = self.compile(block["value"])
+        value_type = self.get_type(block["value"])
+        signed = "i" if value_type.signed else "u"
+
+        result_register = self.get_free_register()
+
+        match block["kind"]:
+            case "NOTBlock":
+                self.writeln(
+                    self.compute_template(
+                        f"sint_{signed}not",
+                        {
+                            "A_REG": value,
+                            "RES_REG": result_register,
+                            "SIZE_CONST": hex((1 << value_type["size"]) - 1),  # type: ignore
+                            "SHIFT_CONST": self.word_size - value_type["size"],  # type: ignore
+                        },
+                    )
+                )
+
+        self.free_register(value)
+        self.occupy_register(result_register)
+        return result_register
 
     def compile_operation_block(self, block):
         # {"kind": "AddBlock", "left": left, "right": right, "result": identifier}
@@ -448,6 +471,17 @@ class __COMPILER__:
                         result = self.compile(__CONSTANT__(__FLOAT_TYPE__(), left / right))  # type: ignore
                     elif operation_type == "DoubleType":
                         result = self.compile(__CONSTANT__(__DOUBLE_TYPE__(), left / right))  # type: ignore
+                case "RSBlock":
+                    result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), int(left) >> int(right)))
+                case "LSBlock":
+                    result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), int(left) << int(right)))
+                case "ANDBlock":
+                    result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), int(left) & int(right)))
+                case "ORlock":
+                    result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), int(left) | int(right)))
+                case "XORBlock":
+                    result = self.compile(__CONSTANT__(__INT_TYPE__(left_type.size, left_type.signed), int(left) ^ int(right)))
+            
             self.free_register(left)
             self.free_register(right)
             return result
@@ -580,36 +614,10 @@ class __COMPILER__:
                         },
                     )
                 )
-            case "NANDBlock":
-                self.writeln(
-                    self.compute_template(
-                        f"{operation_kind}nand",
-                        {
-                            "A_REG": left,
-                            "B_REG": right,
-                            "RES_REG": result_register,
-                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
-                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
-                        },
-                    )
-                )
             case "ORBlock":
                 self.writeln(
                     self.compute_template(
                         f"{operation_kind}or",
-                        {
-                            "A_REG": left,
-                            "B_REG": right,
-                            "RES_REG": result_register,
-                            "SIZE_CONST": hex((1 << result_type["size"]) - 1),  # type: ignore
-                            "SHIFT_CONST": self.word_size - result_type["size"],  # type: ignore
-                        },
-                    )
-                )
-            case "NORBlock":
-                self.writeln(
-                    self.compute_template(
-                        f"{operation_kind}nor",
                         {
                             "A_REG": left,
                             "B_REG": right,
@@ -857,17 +865,17 @@ class __COMPILER__:
 
         left_type = self.get_type(block["left"])
         right_type = self.get_type(block["right"])
-
-        if self.get_number_type(left) and self.get_number_type(right):
+        
+        if self.optimization_level > 0 and self.get_number_type(left) and self.get_number_type(right):
             if self.get_number_type(left) == "float":
-                left = float(left)
+                left = float(left) # type: ignore
             else:
-                left = int(right)
+                left = int(right) # type: ignore
 
             if self.get_number_type(right) == "float":
-                right = float(right)
+                right = float(right) # type: ignore
             else:
-                right = int(right)
+                right = int(right) # type: ignore
                     
             if left_type.kind != "IntType" or right_type.kind != "IntType":
                 if left_type.kind == "IntType":
@@ -991,18 +999,19 @@ class __COMPILER__:
         else_label = self.compile(block["else"])
         condition_result = self.compile(block["condition"])
 
-        if condition_result == "True":
-            self.writeln(f"JMP {then_label}")
-            self.free_register(condition_result)
-            self.free_register(then_label)
-            self.free_register(else_label)
-            return
-        elif condition_result == "False":
-            self.writeln(f"JMP {else_label}")
-            self.free_register(condition_result)
-            self.free_register(then_label)
-            self.free_register(else_label)
-            return
+        if self.optimization_level > 0:
+            if condition_result == "True":
+                self.writeln(f"JMP {then_label}")
+                self.free_register(condition_result)
+                self.free_register(then_label)
+                self.free_register(else_label)
+                return
+            elif condition_result == "False":
+                self.writeln(f"JMP {else_label}")
+                self.free_register(condition_result)
+                self.free_register(then_label)
+                self.free_register(else_label)
+                return
 
         self.writeln(f"BRE {then_label} {condition_result} {2 ** self.word_size - 1}")
         self.writeln(f"BRE {else_label} {condition_result} 0")

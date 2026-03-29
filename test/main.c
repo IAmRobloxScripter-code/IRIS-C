@@ -1,8 +1,8 @@
-typedef unsigned short half;
+#include "stdtypes.h"
 
 int main() {
-    int x = 10;
-    half y = 30.5;
-    half result = x + y + 300;
+    if (100 == 200) {
+        int x = 100;
+    }
     return 0;
 }

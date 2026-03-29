@@ -97,7 +97,7 @@ class __ARRAY_TYPE__:
         self.of = of
         self.size = size
         self.size_in_bits = of.size_in_bits * size
-        self.offset = (of.size_in_bits * size)
+        self.offset = (of.offset * size)
 
     def __getitem__(self, key):
         return getattr(self, key)

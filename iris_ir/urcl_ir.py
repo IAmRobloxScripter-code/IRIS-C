@@ -114,32 +114,21 @@ class __BLOCK_CLASS__:
 
         return block
 
-    def NAND(self, left, right, name=None):
-        identifier = name or self.temporary()
-        block = {
-            "kind": "NANDBlock",
-            "left": left,
-            "right": right,
-            "result": identifier,
-        }
-
-        return block
-
     def OR(self, left, right, name=None):
         identifier = name or self.temporary()
         block = {"kind": "ORBlock", "left": left, "right": right, "result": identifier}
 
         return block
 
-    def NOR(self, left, right, name=None):
-        identifier = name or self.temporary()
-        block = {"kind": "NORBlock", "left": left, "right": right, "result": identifier}
-
-        return block
-
     def XOR(self, left, right, name=None):
         identifier = name or self.temporary()
         block = {"kind": "XORBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+    
+    def NOT(self, value, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "NOTBlock", "value": value, "result": identifier}
 
         return block
 
@@ -257,12 +246,12 @@ class __MODULE_IR__:
                 | "RSBlock"
                 | "LSBlock"
                 | "ANDBlock"
-                | "NANDBlock"
                 | "ORBlock"
-                | "NORBlock"
                 | "XORBlock"
             ):
                 return self.operator_ir(block)
+            case "NOTBlock":
+                return self.unary_ir(block)
             case "GetElementPointerBlock":
                 return self.gep_ir(block)
             case "CallBlock":
@@ -391,6 +380,17 @@ class __MODULE_IR__:
 
     def get_symbol(self):
         return "@" if len(self.stack_frames) == 0 else "%"
+    
+    def unary_ir(self, block):
+        value, value_type = self.ir(block["value"])
+        symbol = self.get_symbol()
+
+        match block["kind"]:
+            case "NOTBlock":
+                self.writeln(
+                    f"{symbol}{block["result"]} = not {value_type.as_string()} {value}"
+                )
+        return self.get_symbol() + block["result"], value_type
 
     def operator_ir(self, block):
         left_value, left_type = self.ir(block["left"])  # type: ignore
@@ -427,17 +427,9 @@ class __MODULE_IR__:
                 self.writeln(
                     f"{symbol}{block["result"]} = and {left_type.as_string()} {left_value}, {right_value}"
                 )
-            case "NANDBlock":
-                self.writeln(
-                    f"{symbol}{block["result"]} = nand {left_type.as_string()} {left_value}, {right_value}"
-                )
             case "ORBlock":
                 self.writeln(
                     f"{symbol}{block["result"]} = or {left_type.as_string()} {left_value}, {right_value}"
-                )
-            case "NORBlock":
-                self.writeln(
-                    f"{symbol}{block["result"]} = nor {left_type.as_string()} {left_value}, {right_value}"
                 )
             case "XORBlock":
                 self.writeln(
@@ -617,32 +609,21 @@ class __MODULE_CLASS__:
 
         return block
 
-    def NAND(self, left, right, name=None):
-        identifier = name or self.temporary()
-        block = {
-            "kind": "NANDBlock",
-            "left": left,
-            "right": right,
-            "result": identifier,
-        }
-
-        return block
-
     def OR(self, left, right, name=None):
         identifier = name or self.temporary()
         block = {"kind": "ORBlock", "left": left, "right": right, "result": identifier}
 
         return block
 
-    def NOR(self, left, right, name=None):
-        identifier = name or self.temporary()
-        block = {"kind": "NORBlock", "left": left, "right": right, "result": identifier}
-
-        return block
-
     def XOR(self, left, right, name=None):
         identifier = name or self.temporary()
         block = {"kind": "XORBlock", "left": left, "right": right, "result": identifier}
+
+        return block
+    
+    def NOT(self, value, name=None):
+        identifier = name or self.temporary()
+        block = {"kind": "NOTBlock", "value": value, "result": identifier}
 
         return block
 

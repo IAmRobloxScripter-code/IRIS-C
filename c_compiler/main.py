@@ -8,7 +8,7 @@ argc = len(sys.argv)
 argv = sys.argv
 
 flags = []
-allowed_flags = ("-O0", "-O1", "-O2", "-O3", "--nosoftware", "--showir")
+allowed_flags = ("-o0", "-o1", "-o2", "-o3", "--nosoftware", "--showir")
 if argc < 2:
     print("iris-c: no input files\ncompilation terminated.")
     sys.exit(1)
@@ -18,11 +18,11 @@ out_flag_index = -1
 non_flags = []
 
 for index, arg in enumerate(argv):
-    if arg == "-o":
+    if arg.lower() == "-o":
         out_flag_index = index
         continue
-    if arg in allowed_flags or arg.startswith("--"):
-        flags.append(arg)
+    if arg.lower() in allowed_flags or arg.startswith("--"):
+        flags.append(arg.lower())
         continue
 
     non_flags.append(arg)
