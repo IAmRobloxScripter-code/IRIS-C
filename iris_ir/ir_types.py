@@ -5,6 +5,7 @@ MAX_BITS = 16
 REPR_MODULE_INDENTATION = 2
 FLOAT_SCALE_FACTOR = 10
 
+
 class __POINTER_TYPE__:
     def __init__(self, type: object):
         self.kind = "PointerType"
@@ -97,7 +98,7 @@ class __ARRAY_TYPE__:
         self.of = of
         self.size = size
         self.size_in_bits = of.size_in_bits * size
-        self.offset = (of.offset * size)
+        self.offset = of.offset * size
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -149,22 +150,23 @@ class __FUNCTION_TYPE__:
         representation += ")"
         return representation
 
+
 class __STRUCT_TYPE__:
     def __init__(self, members: list[object]) -> None:
         self.kind = "StructType"
         self.members = members
         self.size = 1
-        self.size_in_bits = 0 
+        self.size_in_bits = 0
         self.alignment = 1
         self.offset = 0
         for member in members:
-            if member.kind == "ArrayType" and member.size > self.alignment: # type: ignore
-                self.alignment = member.size # type: ignore
+            if member.kind == "ArrayType" and member.size > self.alignment:  # type: ignore
+                self.alignment = member.size  # type: ignore
 
-            if member.kind == "ArrayType": # type: ignore
-                self.offset += member.size # type: ignore
+            if member.kind == "ArrayType":  # type: ignore
+                self.offset += member.size  # type: ignore
             else:
-                self.offset += 1 
+                self.offset += 1
             self.size_in_bits += member.size_in_bits  # type: ignore
 
     def __getitem__(self, key):
@@ -172,13 +174,14 @@ class __STRUCT_TYPE__:
 
     def as_pointer(self):
         return __POINTER_TYPE__(self)
-    
+
     def as_string(self):
         representation = "struct ["
         for index, member in enumerate(self.members):
-            representation += f"{member.as_string()}{", " if index + 1 != len(self.members) else ""}" # type: ignore
+            representation += f"{member.as_string()}{", " if index + 1 != len(self.members) else ""}"  # type: ignore
         representation += "]"
         return representation
+
 
 class __types_CLASS__:
     def IntType(self, size: int, unsigned: bool = False):
@@ -204,7 +207,7 @@ class __types_CLASS__:
 
     def FunctionType(self, return_type: object, args: list[object]):
         return __FUNCTION_TYPE__(return_type, args)
-    
+
     def StructType(self, members: list[object]):
         return __STRUCT_TYPE__(members)
 
@@ -220,11 +223,12 @@ class __VALUE__:
 
 
 class __ADDRESS__:
-    def __init__(self, type, name, value: __VALUE__):
+    def __init__(self, type, name, value: __VALUE__, volatile: bool = False):
         self.kind = "AddressBlock"
         self.type = type.as_pointer()
         self.name = name
         self.value = value
+        self.volatile = volatile
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -257,10 +261,10 @@ class __CONSTANT__:
 
     def as_array_str(self, module_ir):
         representation = "["
-        for index, element in enumerate(self.value): # type: ignore
+        for index, element in enumerate(self.value):  # type: ignore
             value, value_type = module_ir.ir(element)
             representation += (
-                f"{value}{", " if index + 1 != len(self.value) else ""}" # type: ignore
+                f"{value}{", " if index + 1 != len(self.value) else ""}"  # type: ignore
             )
         representation += "]"
         return representation
@@ -323,16 +327,16 @@ class __CONSTANT__:
             representation += '"'
         representation += ", 0]"
         return representation
-    
+
     def as_string_struct(self, module_ir):
         representation = "["
-        for index, member in enumerate(self.value): # type: ignore
+        for index, member in enumerate(self.value):  # type: ignore
             value, value_type = module_ir.ir(member)
-            representation += f"{value}{", " if index + 1 != len(self.value) else ""}" # type: ignore
+            representation += f"{value}{", " if index + 1 != len(self.value) else ""}"  # type: ignore
         representation += "]"
         return representation
 
-    def as_string(self, display_string_as_array=False, module_ir = None):
+    def as_string(self, display_string_as_array=False, module_ir=None):
         if self.type["kind"] == "IntType":
             return self.as_int_str()
         elif self.type["kind"] in ("HalfType", "FloatType", "DoubleType"):
@@ -376,4 +380,16 @@ CMP_OPERATORS_FUNCS = {
     "<=": operator.le,
     ">": operator.gt,
     ">=": operator.ge,
+}
+
+BINARY_OPERATORS = {
+    "+": "add",
+    "-": "sub",
+    "*": "mul",
+    "/": "div",
+    "<<": "LS",
+    ">>": "RS",
+    "&": "AND",
+    "|": "OR",
+    "^": "XOR",
 }

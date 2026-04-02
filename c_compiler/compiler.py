@@ -6,7 +6,7 @@ from typing import TypedDict, Any
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT_DIR)
 from iris_ir.urcl_ir import ir, __BLOCK_CLASS__, __MODULE_CLASS__
-from iris_ir.ir_types import __ARRAY_TYPE__, __POINTER_TYPE__
+from iris_ir.ir_types import BINARY_OPERATORS, __ARRAY_TYPE__, __POINTER_TYPE__
 
 
 class STACK_FRAME(TypedDict):
@@ -119,6 +119,10 @@ class IRIS_IR_C:
             return self.create_if(node)
         elif isinstance(node, c_ast.UnaryOp):
             return self.create_unary_op(node)
+        elif isinstance(node, c_ast.While):
+            return self.create_while(node)
+        elif isinstance(node, c_ast.Assignment):
+            return self.create_assignment(node)
         else:
             raise NotImplementedError(
                 f"Node type not implemented: {type(node).__name__}"
@@ -169,16 +173,16 @@ class IRIS_IR_C:
         if node.name in stack_frame["variables"]:
             return stack_frame["variables"][node.name]["memory"]
         else:
-            for index in range(len(self.stack_frames) - 1, -1, -1):                
+            for index in range(len(self.stack_frames) - 1, -1, -1):
                 frame = self.stack_frames[index]
                 if node.name in frame["variables"]:
-                    return frame["variables"][node.name]
+                    return frame["variables"][node.name]["memory"]
 
         if node.name in self.global_frame["variables"]:
             return self.global_frame["variables"][node.name]["memory"]
         else:
             raise ValueError(f"{node.name} does not exist!")
-        
+
     def create_unary_op(self, node: c_ast.UnaryOp):
         stack_frame = self.get_stack_frame()
         operator = node.op
@@ -188,12 +192,11 @@ class IRIS_IR_C:
             case "~":
                 return stack_frame["builder"].NOT(value)
 
-
     def create_binary_op(self, node: c_ast.BinaryOp):
         stack_frame = self.get_stack_frame()
         operator = node.op
-        left = self.process(node.left)
-        right = self.process(node.right)
+        left = stack_frame["builder"].load(self.process(node.left))
+        right = stack_frame["builder"].load(self.process(node.right))
 
         match operator:
             case "+":
@@ -251,7 +254,9 @@ class IRIS_IR_C:
             else:
                 self.type_cast_stack.append(variable_type)
                 value = self.process(node.init)
-        memory = stack_frame["builder"].alloc(variable_type)
+        memory = stack_frame["builder"].alloc(
+            variable_type, name=node.name, volatile="volatile" in node.quals
+        )
         stack_frame["variables"][node.name] = {
             "type": variable_type,
             "memory": memory,
@@ -272,7 +277,7 @@ class IRIS_IR_C:
             "storage": node.storage,
             "qualifiers": node.quals,
         }
-    
+
     def get_type_cast(self, default):
         if len(self.type_cast_stack) == 0:
             return default
@@ -326,29 +331,33 @@ class IRIS_IR_C:
         builder: __BLOCK_CLASS__ = stack_frame["builder"]
 
         condition_block = builder.create_block()
-        builder.label(condition_block, f"if_cond_{self.if_count}")
+        builder.label(condition_block, f"if_cond_{self.if_count}", eliminate=False)
 
         then_block = builder.create_block()
         then_label = builder.label(then_block, f"if_then_{self.if_count}")
-        
+
         else_block = builder.create_block()
         else_label = builder.label(else_block, f"if_else_{self.if_count}")
 
         current_frame = self.get_stack_frame()
-        self.stack_frames.append({
-            "variables": current_frame["variables"],
-            "builder": condition_block,
-            "return_type": None,
-        })
+        self.stack_frames.append(
+            {
+                "variables": current_frame["variables"],
+                "builder": condition_block,
+                "return_type": None,
+            }
+        )
         condition = self.process(node.cond)
         condition_block.branch(condition, then_label, else_label)
         self.stack_frames.pop()
 
-        self.stack_frames.append({
-            "variables": {},
-            "builder": then_block,
-            "return_type": None,
-        })
+        self.stack_frames.append(
+            {
+                "variables": {},
+                "builder": then_block,
+                "return_type": None,
+            }
+        )
 
         for ast_node in node.iftrue:
             self.process(ast_node)
@@ -358,11 +367,13 @@ class IRIS_IR_C:
         self.stack_frames.pop()
 
         if node.iffalse:
-            self.stack_frames.append({
-                "variables": {},
-                "builder": else_block,
-                "return_type": None,
-            })
+            self.stack_frames.append(
+                {
+                    "variables": {},
+                    "builder": else_block,
+                    "return_type": None,
+                }
+            )
 
             for ast_node in node.iffalse:
                 self.process(ast_node)
@@ -370,11 +381,55 @@ class IRIS_IR_C:
                     break
 
             self.stack_frames.pop()
-        
 
+    def create_while(self, node: c_ast.While):
+        self.if_count += 1
+        stack_frame = self.get_stack_frame()
+        builder: __BLOCK_CLASS__ = stack_frame["builder"]
+        condition_block = builder.create_block()
+        condition_label = builder.label(
+            condition_block, f"loop_cond_{self.if_count}", eliminate=False
+        )
 
+        start_block: __BLOCK_CLASS__ = builder.create_block()
+        start_label = builder.label(start_block, f"loop_start_{self.if_count}")
 
+        end_label = builder.label(None, f"loop_end_{self.if_count}", eliminate=False)
 
+        condition = self.process(node.cond)
+        condition_block.branch(condition, start_label, end_label)
 
+        self.stack_frames.append(
+            {
+                "variables": {},
+                "builder": start_block,
+                "return_type": None,
+            }
+        )
 
+        for ast_node in node.stmt:
+            self.process(ast_node)
+            if isinstance(ast_node, c_ast.Return):
+                break
+        start_block.jump(condition_label)
 
+        self.stack_frames.pop()
+
+    def create_assignment(self, node: c_ast.Assignment):
+        stack_frame = self.get_stack_frame()
+        operator = node.op
+        lvalue = self.process(node.lvalue)
+        rvalue = self.process(node.rvalue)
+
+        match operator:
+            case "=":
+                stack_frame["builder"].store(rvalue, lvalue)
+            case "+=" | "-=" | "*=" | "/=" | ">>=" | "<<=" | "&=" | "|=" | "^=":
+                symbol = operator[0]
+                stack_frame["builder"].store(
+                    stack_frame["builder"][BINARY_OPERATORS[symbol]](
+                        stack_frame["builder"].load(lvalue),
+                        stack_frame["builder"].load(rvalue),
+                    ),
+                    lvalue,
+                )

@@ -57,8 +57,10 @@ class __BLOCK_CLASS__:
     def alloc(self, type, name=None, volatile: bool = False):
         identifier = name or self.temporary()
         value = __VALUE__(type, identifier)
-        address = __ADDRESS__(type, identifier, value)
-        self.blocks.append({"kind": "AllocBlock", "type": type, "result": value, "volatile": volatile})
+        address = __ADDRESS__(type, identifier, value, volatile)
+        self.blocks.append(
+            {"kind": "AllocBlock", "type": type, "result": value, "volatile": volatile}
+        )
         self.stack[identifier] = {
             "kind": "AllocatedMemoryBlock",
             "type": type,
@@ -125,7 +127,7 @@ class __BLOCK_CLASS__:
         block = {"kind": "XORBlock", "left": left, "right": right, "result": identifier}
 
         return block
-    
+
     def NOT(self, value, name=None):
         identifier = name or self.temporary()
         block = {"kind": "NOTBlock", "value": value, "result": identifier}
@@ -159,17 +161,24 @@ class __BLOCK_CLASS__:
         return __TEMPORARY_VALUE__(func["type"].return_type, identifier)
 
     def load(self, pointer):
+        if pointer["kind"] == "ConstantBlock":
+            return pointer
         return {"kind": "LoadValueBlock", "pointer": pointer}
 
     def load_imm(self, pointer):
         return pointer.value
 
-    def label(self, block, name=None):
+    def label(self, block, name=None, eliminate=True):
         identifier = name or f"LABEL_{self.temporary()}"
         self.blocks.append(
-            {"kind": "LabelDefineBlock", "block": block, "label": identifier}
+            {
+                "kind": "LabelDefineBlock",
+                "block": block,
+                "label": identifier,
+                "eliminate": eliminate,
+            }
         )
-        return {"kind": "LabelBlock", "label": identifier}
+        return {"kind": "LabelBlock", "label": identifier, "block": block}
 
     def jump(self, where):
         self.blocks.append({"kind": "JumpBlock", "label": where})
@@ -316,7 +325,7 @@ class __MODULE_IR__:
             "kind": "LocalVariable",
             "type": block["result"].type,
             "initialized": False,
-            "volatile": block["volatile"]
+            "volatile": block["volatile"],
         }
         return "%" + block["result"].name, block["result"].type
 
@@ -335,7 +344,9 @@ class __MODULE_IR__:
         memory = block["memory"]
         if memory["name"] in frame["data"]:
             if not frame["data"][memory["name"]]["initialized"]:
-                self.writeln(f"{"volatile " if frame["data"][memory["name"]]["volatile"] else ""}%{memory.name} = alloc {memory.value.type.as_string()}")
+                self.writeln(
+                    f"{"volatile " if frame["data"][memory["name"]]["volatile"] else ""}%{memory.name} = alloc {memory.value.type.as_string()}"
+                )
             frame["data"][memory["name"]]["initialized"] = True
             value, type = self.ir(block["value"])  # type: ignore
             name, alloc_type = self.ir(memory)  # type: ignore
@@ -355,7 +366,9 @@ class __MODULE_IR__:
         if block["block"] == None:
             return block["name"], block["type"]
 
-        self.write(f"{"inline " if block["inline"] else ""}func {block["name"]} {block["type"].return_type.as_string()} (")
+        self.write(
+            f"{"inline " if block["inline"] else ""}func {block["name"]} {block["type"].return_type.as_string()} ("
+        )
         for index, arg in enumerate(block["args"]):
             self.write(f"{arg["arg"].as_string()} {arg["name"]}{", " if index + 1 != len(block["args"]) else ""}")  # type: ignore
 
@@ -380,7 +393,7 @@ class __MODULE_IR__:
 
     def get_symbol(self):
         return "@" if len(self.stack_frames) == 0 else "%"
-    
+
     def unary_ir(self, block):
         value, value_type = self.ir(block["value"])
         symbol = self.get_symbol()
@@ -535,7 +548,7 @@ class __MODULE_CLASS__:
         name: str,
         args: list[object],
         reset_temp_count=True,
-        inline = False,
+        inline=False,
     ) -> TYPEDEF_FUNCTION_BLOCK:
         if block and reset_temp_count == True:
             block.temporary_count = 0
@@ -620,19 +633,24 @@ class __MODULE_CLASS__:
         block = {"kind": "XORBlock", "left": left, "right": right, "result": identifier}
 
         return block
-    
+
     def NOT(self, value, name=None):
         identifier = name or self.temporary()
         block = {"kind": "NOTBlock", "value": value, "result": identifier}
 
         return block
 
-    def label(self, block, name=None):
+    def label(self, block, name=None, eliminate=True):
         identifier = name or f"LABEL_{self.temporary()}"
         self.blocks.append(
-            {"kind": "LabelDefineBlock", "block": block, "label": identifier}
+            {
+                "kind": "LabelDefineBlock",
+                "block": block,
+                "label": identifier,
+                "eliminate": eliminate,
+            }
         )
-        return {"kind": "LabelBlock", "label": identifier}
+        return {"kind": "LabelBlock", "label": identifier, "block": block}
 
     def jump(self, where):
         self.blocks.append({"kind": "JumpBlock", "label": where})
@@ -649,6 +667,8 @@ class __MODULE_CLASS__:
         }
 
     def load(self, pointer):
+        if pointer["kind"] == "ConstantBlock":
+            return pointer
         return {"kind": "LoadValueBlock", "pointer": pointer}
 
     def load_imm(self, pointer):

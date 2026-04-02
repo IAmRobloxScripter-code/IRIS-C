@@ -1,8 +1,8 @@
-#include "stdtypes.h"
-
 int main() {
-    if (100 == 200) {
-        int x = 100;
-    }
-    return 0;
+  int x = 0;
+  while (x < 25) {
+    x += 1;
+  }
+
+  return 0;
 }
