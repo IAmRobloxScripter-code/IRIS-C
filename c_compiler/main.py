@@ -38,19 +38,18 @@ try:
     with open(input_file_name, "r") as input_file:
         parser = pycparser.c_parser.CParser()
         preprocessor = pcpp.Preprocessor()
-    
-        preprocessor.add_path('.')  
 
-        preprocessor.parse(input_file)
+        preprocessor.add_path(".")
 
+        preprocessor.parse(input_file.read())
         output = io.StringIO()
         preprocessor.write(output)
         source = output.getvalue()
         ast = parser.parse(source)
         # ast.show()
-        compiler_class = IRIS_IR_C(ast, flags)
+        compiler_class = IRIS_IR_C(ast, flags, preprocessor)
         compiler_class.compile(output_file_name)
-        
+
 
 except FileNotFoundError:
     print(

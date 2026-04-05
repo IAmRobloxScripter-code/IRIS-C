@@ -428,11 +428,32 @@ class __COMPILER__:
 
     def compile_operation_block(self, block):
         # {"kind": "AddBlock", "left": left, "right": right, "result": identifier}
-        left = self.compile(block["left"])
-        right = self.compile(block["right"])
 
         left_type = self.get_type(block["left"])
         right_type = self.get_type(block["right"])
+
+        if left_type.kind in ("PointerType", "ArrayType") or right_type.kind in (
+            "PointerType",
+            "ArrayType",
+        ):
+            pointer = None
+            offset = 0
+
+            if left_type.kind in ("PointerType", "ArrayType"):
+                pointer = self.compile(block["left"]["pointer"])
+                offset = self.compile(block["right"])
+            else:
+                pointer = self.compile(block["right"]["pointer"])
+                offset = self.compile(block["left"])
+
+            result_register = self.get_free_register()
+            self.writeln(f"ADD {result_register} {pointer} {offset}")
+            self.free_register(pointer)
+            self.free_register(offset)
+            return result_register
+
+        left = self.compile(block["left"])
+        right = self.compile(block["right"])
 
         result_type = left_type
         operation_kind = "int"
@@ -552,7 +573,9 @@ class __COMPILER__:
         elif operation_type == "DoubleType":
             operation_kind = "sfp64_"
         else:
-            print("Invalid type for operation!")
+            print(
+                f"Invalid type for operation: '{left_type.as_string()}' and '{right_type.as_string()}'!"
+            )
             self.free_register(left)
             self.free_register(right)
             self.free_register(result_register)
@@ -718,9 +741,7 @@ class __COMPILER__:
                 data["value"]["kind"] == "AddressBlock"
                 and data["value"]["name"] in frame["variables"]
             ):
-                return self.compile_value_block(
-                    frame["variables"][data["value"]["name"]]
-                )
+                return self.compile(frame["variables"][data["value"]["name"]])
 
             if data["value"]["kind"] == "ConstantBlock" and data["value"]["type"][
                 "kind"
@@ -872,13 +893,12 @@ class __COMPILER__:
 
         data = frame["variables"][name]
         phi = self.get_phi_frame()
-
-        if name not in phi and not data["volatile"]:
+        if name not in phi and (not data["volatile"] and not block["volatile"]):
             if (
                 data["value"]["kind"] == "AddressBlock"
                 and data["value"]["name"] in frame["variables"]
             ):
-                return self.compile_value_block(data["value"])
+                return self.compile(data["value"])
 
             if data["value"]["kind"] == "ConstantBlock" and data["value"]["type"][
                 "kind"
@@ -917,9 +937,14 @@ class __COMPILER__:
         self.writeln(f"MOV {index_register} {index_value}")
         offset_register = self.get_free_register()
         self.occupy_register(offset_register)
-        element_type = self.get_type(block["pointer"])
+        pointer_type = self.get_type(block["pointer"])
+        element_type = None
+        if pointer_type["kind"] == "ArrayType":
+            element_type = pointer_type["of"]
+        elif pointer_type["kind"] == "PointerType":
+            element_type = pointer_type["to"]
         self.writeln(
-            f"MLT {offset_register} {index_register} {element_type.offset - 1}"  # type: ignore
+            f"MLT {offset_register} {index_register} {element_type.offset}"  # type: ignore
         )
         register = self.get_free_register()
         self.writeln(f"ADD {register} {base_pointer} {offset_register}")
@@ -937,14 +962,25 @@ class __COMPILER__:
             and block["pointer"]["kind"] == "AddressBlock"
             and block["pointer"].name in stack_frame["variables"]
         ):
+            if block["pointer"]["type"]["to"]["kind"] == "PointerType":
+                register = self.get_free_register()
+                self.writeln(
+                    f"LLOD {register} R1 -{stack_frame["variables"][block["pointer"].name]["stack_offset"]}"
+                )
+                self.occupy_register(register)
+                return register
+            pointer = self.compile(block["pointer"])
+            if self.get_number_type(pointer):
+                return pointer
             register = self.get_free_register()
-            self.writeln(
-                f"LLOD {register} R1 -{stack_frame["variables"][block["pointer"].name]["stack_offset"]}"
-            )
+            self.writeln(f"LOD {register} {pointer}")
             self.occupy_register(register)
+            self.free_register(pointer)
             return register
 
         pointer = self.compile(block["pointer"])
+        if not self.is_register(pointer):
+            return pointer
         register = self.get_free_register()
         self.writeln(f"LOD {register} {pointer}")
         self.occupy_register(register)
@@ -1249,7 +1285,7 @@ class __COMPILER__:
             case "TemporaryBlock":
                 return block.type
             case "GetElementPointerBlock":
-                return block["pointer"].type
+                return block["element_type"]
             case "StructTypeBlock":
                 return block["type"]
             case "AddressBlock":

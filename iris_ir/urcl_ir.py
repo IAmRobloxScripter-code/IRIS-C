@@ -146,7 +146,6 @@ class __BLOCK_CLASS__:
         }
 
     def call(self, func, arguments: list, name=None):
-        print(func["kind"])
         if func["type"]["kind"] == "PointerType":
             func = self.load_imm(func)
         identifier = name or self.temporary()
@@ -160,10 +159,13 @@ class __BLOCK_CLASS__:
 
         return __TEMPORARY_VALUE__(func["type"].return_type, identifier)
 
-    def load(self, pointer):
-        if pointer["kind"] == "ConstantBlock":
-            return pointer
-        return {"kind": "LoadValueBlock", "pointer": pointer}
+    def load(self, pointer, name=None):
+        identifier = name or self.temporary()
+        return {
+            "kind": "LoadValueBlock",
+            "pointer": pointer,
+            "result": identifier,
+        }
 
     def load_imm(self, pointer):
         return pointer.value
@@ -202,6 +204,10 @@ class __BLOCK_CLASS__:
                 "else": else_label,
             }
         )
+
+    def as_pointer(self, value, name=None, propagate=True):
+        identifier = name or self.temporary()
+        return __ADDRESS__(value["type"], identifier, value, volatile=not propagate)
 
 
 class __MODULE_IR__:
@@ -494,7 +500,20 @@ class __MODULE_IR__:
 
     def load_ir(self, block):
         result, result_type = self.ir(block["pointer"])
-        return result, result_type
+        if result_type["kind"] == "ArrayType":
+            element_identifier = "of"
+        else:
+            element_identifier = "to"
+        if not hasattr(result_type, element_identifier):
+            self.writeln(
+                f"{self.get_symbol()}{block["result"]} = load {result_type.as_string()} {result}"
+            )
+            return self.get_symbol() + block["result"], result_type
+        else:
+            self.writeln(
+                f"{self.get_symbol()}{block["result"]} = load {result_type[element_identifier].as_string()} {result}"
+            )
+            return self.get_symbol() + block["result"], result_type[element_identifier]
 
     def compare_ir(self, block):
         left_value, left_type = self.ir(block["left"])  # type: ignore
@@ -666,10 +685,18 @@ class __MODULE_CLASS__:
             "name": name or self.temporary(),
         }
 
-    def load(self, pointer):
+    def load(self, pointer, name=None, deref=False):
+        if pointer["kind"] == "AddressBlock":
+            return pointer["value"]
         if pointer["kind"] == "ConstantBlock":
             return pointer
-        return {"kind": "LoadValueBlock", "pointer": pointer}
+        identifier = name or self.temporary()
+        return {
+            "kind": "LoadValueBlock",
+            "pointer": pointer,
+            "result": identifier,
+            "deref": deref,
+        }
 
     def load_imm(self, pointer):
         return pointer.value
@@ -727,6 +754,10 @@ class __MODULE_CLASS__:
                 "else": else_label,
             }
         )
+
+    def as_pointer(self, value, name=None, propagate=True):
+        identifier = name or self.temporary()
+        return __ADDRESS__(value["type"], identifier, value, volatile=not propagate)
 
     def set_header(
         self,

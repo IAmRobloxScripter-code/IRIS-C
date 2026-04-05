@@ -238,11 +238,25 @@ class __CONSTANT__:
     def __init__(self, type, value):
         self.kind = "ConstantBlock"
         self.type = type
+
+        if value == 0:
+            match type.kind:
+                case "ArrayType":
+                    value = []
+                    for _ in range(type.size):
+                        value.append(__CONSTANT__(type.of, 0))
+                case "StringType":
+                    value = ""
+                case "StructType":
+                    value = []
+                    for member in type.members:
+                        value.append(__CONSTANT__(member, 0))
+
         if type.kind in ("HalfType", "FloatType", "DoubleType"):
-            value = float(value)
+            value = float(value)  # type: ignore
 
         if type.kind == "IntType":
-            value = int(value)
+            value = int(value)  # type: ignore
             mask = (1 << type.size) - 1
             value = value & mask
             if type.signed:
@@ -257,7 +271,7 @@ class __CONSTANT__:
         return str(self.value)
 
     def as_float_str(self):
-        return str(float(self.value))
+        return str(float(self.value))  # type: ignore
 
     def as_array_str(self, module_ir):
         representation = "["
